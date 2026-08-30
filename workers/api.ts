@@ -468,6 +468,62 @@ async function getEnabledModels(env: Env, domain: string): Promise<string[]> {
 	return MODELS.map((m) => m.id);
 }
 
+apiRoutes.get("/autoposter", (c) => {
+  const html = `
+<!DOCTYPE html>
+<html>
+<head><title>Autoposter - Zawaago</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-6">
+<div class="max-w-4xl mx-auto">
+<h1 class="text-2xl font-bold mb-4">Zawaago + InnoTech Autoposter</h1>
+<div class="bg-white p-4 rounded border mb-4">
+<label class="text-sm">Page</label>
+<select id="page" class="border p-2 rounded ml-2"><option>Zawaago</option><option>InnoTech</option></select>
+<input id="topic" placeholder="Topic likho" class="border p-2 rounded w-80 ml-2" value="AI se travel planning">
+<button onclick="generate()" class="bg-blue-600 text-white px-4 py-2 rounded ml-2">Generate</button>
+</div>
+<div class="grid grid-cols-2 gap-4">
+<div class="bg-white p-4 rounded border">
+<label class="text-sm font-bold">Caption</label>
+<textarea id="caption" class="w-full h-64 border p-2 mt-2 text-sm"></textarea>
+<button onclick="postNow()" class="bg-green-600 text-white w-full py-2 rounded mt-2">Post Now to FB</button>
+<div id="log" class="text-xs bg-gray-50 p-2 mt-2 rounded"></div>
+</div>
+<div class="bg-white p-4 rounded border">
+<label class="text-sm font-bold">Image</label>
+<img id="img" class="mt-2 w-full h-64 object-cover rounded bg-gray-50" />
+</div>
+</div>
+</div>
+<script>
+async function generate(){
+ const topic=document.getElementById('topic').value
+ const page=document.getElementById('page').value
+ document.getElementById('log').innerText='Generating...'
+ const res=await fetch('/api/autoposter/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic,pageName:page})})
+ const data=await res.json()
+ document.getElementById('caption').value=data.caption||JSON.stringify(data)
+ document.getElementById('img').src=data.imageUrl||''
+ document.getElementById('log').innerText='Ready'
+}
+async function postNow(){
+ const caption=document.getElementById('caption').value
+ const page=document.getElementById('page').value
+ document.getElementById('log').innerText='Posting...'
+ const res=await fetch('/api/autoposter/post-now',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({caption,page})})
+ const data=await res.json()
+ document.getElementById('log').innerText=JSON.stringify(data)
+}
+</script>
+</body>
+</html>
+  `
+  return c.html(html)
+})
+
 // ── Setup endpoint ─────────────────────────────────────────────────────────
 
 async function handleSetup(
