@@ -14,10 +14,13 @@ import type { ModelConfig } from "../src/config";
 // ── Types ──────────────────────────────────────────────────────────────────
 
 type Env = {
-	AI: Ai;
-	AEO_KV: KVNamespace;
-	BRAND_VISIBILITY_QUEUE: Queue;
-	TARGET_DOMAIN: string;
+  AI: Ai;
+  AEO_KV: KVNamespace;
+  BRAND_VISIBILITY_QUEUE: Queue;
+  TARGET_DOMAIN: string;
+  FB_TOKEN: string;
+  PAGE_ID_ZAWAAGO: string;
+  PAGE_ID_INNOTECH: string;
 };
 
 type Site = {
