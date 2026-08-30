@@ -374,6 +374,42 @@ apiRoutes.get("/models", (c) => {
 		})),
 	});
 });
+// ── Zawaago + InnoTech Autoposter ────────────────────────────────────────
+
+apiRoutes.get("/autoposter/health", (c) => {
+  return c.json({
+    status: "Autoposter OK",
+    ai:!!c.env.AI,
+    has_token:!!c.env.FB_TOKEN,
+    time: new Date().toISOString()
+  })
+})
+
+apiRoutes.post("/autoposter/generate", async (c) => {
+  const { topic, pageName } = await c.req.json<{ topic: string; pageName: string }>()
+  const name = pageName || "Zawaago"
+  const prompt = `You are social media manager for ${name}. Topic: ${topic}. Write caption in Hindi Devanagari with English tech words, 120 words, engaging, add 5 hashtags, 1 CTA.`
+
+  const r: any = await c.env.AI.run('@cf/meta/llama-3.1-8b-instruct' as any, { prompt, max_tokens: 500 }, { gateway: { id: "default" } } as any)
+  const caption = r.response || r?.choices?.[0]?.message?.content || "Caption failed"
+  const imageUrl = `https://source.unsplash.com/800x600/?${encodeURIComponent(topic)},technology`
+
+  return c.json({ caption, imageUrl, topic, pageName: name })
+})
+
+apiRoutes.post("/autoposter/post-now", async (c) => {
+  const { caption, page } = await c.req.json<{ caption: string; page: string }>()
+  const pageId = page === "InnoTech"? c.env.PAGE_ID_INNOTECH : c.env.PAGE_ID_ZAWAAGO
+
+  const fbRes = await fetch(`https://graph.facebook.com/v21.0/${pageId}/feed`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ message: caption, access_token: c.env.FB_TOKEN })
+  })
+  const data = await fbRes.json()
+  return c.json(data)
+})
+
 
 // ── Setup (AI prompt generation via gateway) ───────────────────────────────
 
