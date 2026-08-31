@@ -26,30 +26,31 @@ apiRoutes.post("/autoposter/generate", async (c) => {
     const topic = body.topic || "AI travel";
     const pageName = body.pageName || "Zawaago";
     const prompt = "You are expert social media manager for travel brand " + pageName + ". Topic: " + topic + ". Write viral Facebook caption in Hindi Devanagari + English tech words mix, 100-130 words, 2-3 emoji, 5 hashtags like #Zawaago #Travel, 1 CTA in Hindi.";
+
+    const MODELS = [
+      '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      '@cf/meta/llama-3.1-8b-instruct-fp8',
+      '@cf/meta/llama-3.2-3b-instruct',
+      '@cf/mistral/mistral-7b-instruct-v0.1'
+    ];
+
     let caption = "";
     let usedModel = "";
-    try {
-      const r: any = await c.env.AI.run('@cf/meta/llama-3.1-8b-instruct' as any, { prompt: prompt, max_tokens: 600 }, { gateway: { id: "default" } } as any);
-      caption = r.response || r.result || "";
-      usedModel = "llama-3.1 prompt";
-    } catch (e) {}
-    if (!caption) {
+    let lastErr = "";
+
+    for (const model of MODELS) {
       try {
-        const r: any = await c.env.AI.run('@cf/meta/llama-3.1-8b-instruct' as any, { messages: [{ role: "user", content: prompt }], max_tokens: 600 }, { gateway: { id: "default" } } as any);
-        caption = r.response || r.result || "";
-        usedModel = "llama-3.1 messages";
-      } catch (e) {}
+        const r: any = await c.env.AI.run(model as any,
+          { messages: [{ role: "user", content: prompt }], max_tokens: 600 },
+          { gateway: { id: "default" } } as any
+        );
+        caption = r.response || r.result || r.choices?.[0]?.message?.content || "";
+        if (caption) { usedModel = model; break; }
+      } catch (e: any) { lastErr = e.message; }
     }
-    if (!caption) {
-      try {
-        const r: any = await c.env.AI.run('@cf/meta/llama-2-7b-chat-fp16' as any, { messages: [{ role: "user", content: prompt }] }, { gateway: { id: "default" } } as any);
-        caption = r.response || r.result || "";
-        usedModel = "llama-2";
-      } catch (e: any) {
-        return c.json({ error: "AI failed", details: e.message }, 500);
-      }
-    }
-    if (!caption) return c.json({ error: "Empty caption" }, 500);
+
+    if (!caption) return c.json({ error: "AI failed all models", details: lastErr, tried: MODELS }, 500);
+
     const imageUrl = "https://picsum.photos/seed/" + encodeURIComponent(topic) + "/800/600";
     return c.json({ caption: caption, imageUrl: imageUrl, topic: topic, pageName: pageName, usedModel: usedModel });
   } catch (err: any) {
