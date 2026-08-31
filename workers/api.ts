@@ -187,4 +187,63 @@ async function generate(){
   if(!topic){alert('Topic likho');return;}
   btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Generating...';
   setProgress(20,'Connecting AI...');
-  document.getElementById('log').innerText='Generating
+  document.getElementById('log').innerText='Generating caption for: '+topic+'\\nPage: '+page;
+  document.getElementById('log').className='text-xs bg-blue-50 p-3 mt-3 rounded-lg break-all';
+  try{
+    setProgress(50,'AI likh raha hai... (5-10 sec)');
+    const res=await fetch('/api/autoposter/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic,pageName:page})});
+    setProgress(80,'Response parse...');
+    const text=await res.text();
+    let data;try{data=JSON.parse(text);}catch(e){data={error:'Invalid JSON',raw:text.slice(0,500)}}
+    if(data.error){
+      document.getElementById('log').innerText='ERROR: '+JSON.stringify(data,null,2);
+      document.getElementById('log').className='text-xs bg-red-100 text-red-700 p-3 mt-3 rounded-lg';
+      setProgress(100,'Failed: '+data.error);
+    }else{
+      document.getElementById('caption').value=data.caption;
+      document.getElementById('img').src=data.imageUrl;
+      document.getElementById('modelUsed').innerText=data.usedModel||'';
+      document.getElementById('log').innerText='SUCCESS! Caption ready. Model: '+(data.usedModel||'')+'\\nLength: '+data.caption.length+' chars';
+      document.getElementById('log').className='text-xs bg-green-50 text-green-700 p-3 mt-3 rounded-lg';
+      setProgress(100,'Done! Ready to Post');
+    }
+  }catch(e){
+    document.getElementById('log').innerText='Network Error: '+e.message;
+    document.getElementById('log').className='text-xs bg-red-100 p-3 mt-3 rounded-lg';
+    setProgress(100,'Network Error');
+  }finally{btn.disabled=false;btn.innerHTML='<i class="fas fa-magic"></i> Generate';resetProgress();}
+}
+
+async function postNow(){
+  const caption=document.getElementById('caption').value;
+  const page=document.getElementById('page').value;
+  const btn=document.getElementById('postBtn');
+  if(!caption){alert('Pehle Generate karo');return;}
+  btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Posting...';
+  setProgress(30,'Posting to '+page+'...');
+  document.getElementById('log').innerText='Posting to Facebook Page: '+page+'...';
+  try{
+    const res=await fetch('/api/autoposter/post-now',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({caption,page})});
+    const data=await res.json();
+    setProgress(100,'Facebook Response');
+    document.getElementById('log').innerText=JSON.stringify(data,null,2);
+    if(data.id){
+      document.getElementById('log').className='text-xs bg-green-100 text-green-700 p-3 mt-3 rounded-lg';
+      document.getElementById('log').innerText='POSTED SUCCESS!\\nPost ID: '+data.id+'\\n\\n'+JSON.stringify(data,null,2);
+      alert('Posted! Check your Facebook Page');
+    }else{
+      document.getElementById('log').className='text-xs bg-red-100 text-red-700 p-3 mt-3 rounded-lg';
+    }
+  }catch(e){document.getElementById('log').innerText='Post Error: '+e.message;setProgress(100,'Error');}
+  finally{btn.disabled=false;btn.innerHTML='<i class="fab fa-facebook"></i> Post Now to Facebook';resetProgress();}
+}
+
+function copyCaption(){const c=document.getElementById('caption').value;if(!c){alert('Nothing to copy');return;}navigator.clipboard.writeText(c);document.getElementById('log').innerText='Copied to clipboard!';}
+window.onload=checkHealth;
+</script>
+</body>
+</html>`;
+  return c.html(html);
+});
+`;
+
