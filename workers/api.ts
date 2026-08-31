@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { MODELS, RETENTION_DAYS, SETUP_MODEL } from "../src/config";
 
 type Env = {
   AI: Ai;
@@ -11,60 +10,181 @@ type Env = {
   PAGE_ID_INNOTECH: string;
 };
 
-type Site = { domain: string; brandName?: string; competitors?: string[]; description?: string; addedAt: string; };
-type IndexEntry = { id: string; timestamp: string; rate: number; modelCount: number; };
-type TestRun = { id: string; domain: string; startedAt: string; status: "running" | "complete"; total: number; completed: number; citations: any[]; summary?: any; };
-type Prompt = { text: string; active: boolean; };
-export type QueueJob = { testId: string; domain: string; modelId: string; modelName: string; provider: string; prompt: string; maxTokens: number; isGemini?: boolean; isAnthropic?: boolean; };
-
 export const apiRoutes = new Hono<{ Bindings: Env }>();
 
-// --- ORIGINAL ROUTES ---
+// --- HEALTH ---
 apiRoutes.get("/sites", async (c) => {
-  const sites = (await c.env.AEO_KV.get("sites", "json") as Site[]) ?? [];
+  const sites = (await c.env.AEO_KV.get("sites", "json") as any[])?? [];
   return c.json(sites);
 });
 
 apiRoutes.get("/models", (c) => {
-  return c.json({ total: MODELS.length, models: MODELS.map((m) => ({ name: m.name, id: m.id, provider: m.provider })) });
+  return c.json({ total: 1, models: [{ name: "Llama 3.1", id: "llama-3.1", provider: "meta" }] });
 });
 
-// --- AUTOPOSTER ROUTES (SAFE) ---
 apiRoutes.get("/autoposter/health", (c) => {
-  return c.json({ status: "Autoposter OK", ai: !!c.env.AI, has_token: !!c.env.FB_TOKEN, time: new Date().toISOString() });
-});
-
-apiRoutes.post("/autoposter/generate", async (c) => {
-  const body = await c.req.json() as any;
-  const topic = body.topic || "AI";
-  const pageName = body.pageName || "Zawaago";
-  const prompt = "You are social media manager for " + pageName + ". Topic: " + topic + ". Write caption in Hindi Devanagari mix English tech words, 120 words, engaging, 5 hashtags, 1 CTA.";
-  const r: any = await c.env.AI.run('@cf/meta/llama-3.1-8b-instruct' as any, { prompt, max_tokens: 500 });
-  const caption = r.response || "Caption failed";
-  const imageUrl = "https://source.unsplash.com/800x600/?" + encodeURIComponent(topic);
-  return c.json({ caption, imageUrl, topic, pageName });
-});
-
-apiRoutes.post("/autoposter/post-now", async (c) => {
-  const body = await c.req.json() as any;
-  const caption = body.caption;
-  const page = body.page || "Zawaago";
-  const pageId = page === "InnoTech" ? c.env.PAGE_ID_INNOTECH : c.env.PAGE_ID_ZAWAAGO;
-  if (!c.env.FB_TOKEN) return c.json({ error: "FB_TOKEN not set in Cloudflare Variables" }, 400);
-  const fbRes = await fetch("https://graph.facebook.com/v21.0/" + pageId + "/feed", {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ message: caption, access_token: c.env.FB_TOKEN })
+  return c.json({
+    status: "Autoposter OK",
+    ai:!!c.env.AI,
+    has_token:!!c.env.FB_TOKEN,
+    page_zawaago:!!c.env.PAGE_ID_ZAWAAGO,
+    page_innotech:!!c.env.PAGE_ID_INNOTECH,
+    time: new Date().toISOString()
   });
-  const data = await fbRes.json();
-  return c.json(data);
 });
 
+// --- GENERATE CAPTION ---
+apiRoutes.post("/autoposter/generate", async (c) => {
+  try {
+    const body = await c.req.json() as any;
+    const topic = body.topic || "AI travel";
+    const pageName = body.pageName || "Zawaago";
+
+    const prompt = `You are expert social media manager for travel brand ${pageName}. Topic: ${topic}. Write viral Facebook caption in Hindi (Devanagari) + English tech words mix, 100-130 words, engaging, add emoji 2-3, add 5 hashtags (like #Zawaago #Travel), add 1 CTA in Hindi. Do NOT add English explanation.`;
+
+    let caption = "";
+    let usedModel = "";
+
+    // Try 1: llama 3.1 with prompt
+    try {
+      const r: any = await c.env.AI.run('@cf/meta/llama-3.1-8b-instruct' as any,
+        { prompt, max_tokens: 600 },
+        { gateway: { id: "default" } } as any
+      );
+      caption = r.response || r.result || "";
+      usedModel = "llama-3.1-8b prompt";
+    } catch (e) {}
+
+    // Try 2: llama 3.1 with messages
+    if (!caption) {
+      try {
+        const r: any = await c.env.AI.run('@cf/meta/llama-3.1-8b-instruct' as any,
+          { messages: [{ role: "user", content: prompt }], max_tokens: 600 },
+          { gateway: { id: "default" } } as any
+        );
+        caption = r.response || r.result || r?.choices?.[0]?.message?.content || "";
+        usedModel = "llama-3.1 messages";
+      } catch (e) {}
+    }
+
+    // Try 3: llama 2 fallback
+    if (!caption) {
+      try {
+        const r: any = await c.env.AI.run('@cf/meta/llama-2-7b-chat-fp16' as any,
+          { messages: [{ role: "user", content: prompt }] },
+          { gateway: { id: "default" } } as any
+        );
+        caption = r.response || r.result || "";
+        usedModel = "llama-2 fallback";
+      } catch (e: any) {
+        return c.json({ error: "AI failed all models", details: e.message, usedModel }, 500);
+      }
+    }
+
+    if (!caption) return c.json({ error: "Empty caption", usedModel }, 500);
+
+    const imageUrl = "https://picsum.photos/seed/" + encodeURIComponent(topic) + "/800/600";
+    return c.json({ caption, imageUrl, topic, pageName, usedModel });
+
+  } catch (err: any) {
+    return c.json({ error: "Generate exception", details: err?.message || String(err) }, 500);
+  }
+});
+
+// --- POST NOW ---
+apiRoutes.post("/autoposter/post-now", async (c) => {
+  try {
+    const body = await c.req.json() as any;
+    const caption = body.caption;
+    const page = body.page || "Zawaago";
+    if (!caption) return c.json({ error: "Caption empty" }, 400);
+
+    const pageId = page === "InnoTech"? c.env.PAGE_ID_INNOTECH : c.env.PAGE_ID_ZAWAAGO;
+    if (!pageId) return c.json({ error: "Page ID not set for " + page }, 400);
+    if (!c.env.FB_TOKEN) return c.json({ error: "FB_TOKEN not set" }, 400);
+
+    const fbRes = await fetch("https://graph.facebook.com/v21.0/" + pageId + "/feed", {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ message: caption, access_token: c.env.FB_TOKEN })
+    });
+    const data: any = await fbRes.json();
+    return c.json(data);
+  } catch (err: any) {
+    return c.json({ error: "Post exception", details: err?.message }, 500);
+  }
+});
+
+// --- FINAL UI WITH PROGRESS ---
 apiRoutes.get("/autoposter", (c) => {
-  const html = '<!DOCTYPE html><html><head><title>Autoposter</title><meta name="viewport" content="width=device-width,initial-scale=1"><script src="https://cdn.tailwindcss.com"></script></head><body class="bg-gray-100 p-6"><div class="max-w-4xl mx-auto"><h1 class="text-2xl font-bold mb-4">Zawaago + InnoTech Autoposter</h1><div class="bg-white p-4 rounded border mb-4"><select id="page" class="border p-2 rounded"><option>Zawaago</option><option>InnoTech</option></select><input id="topic" class="border p-2 rounded w-80 ml-2" value="AI se travel planning"><button onclick="generate()" class="bg-blue-600 text-white px-4 py-2 rounded ml-2">Generate</button></div><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div class="bg-white p-4 rounded border"><textarea id="caption" class="w-full h-64 border p-2 text-sm"></textarea><button onclick="postNow()" class="bg-green-600 text-white w-full py-2 rounded mt-2">Post Now</button><div id="log" class="text-xs bg-gray-50 p-2 mt-2 rounded break-all"></div></div><div class="bg-white p-4 rounded border"><img id="img" class="w-full h-64 object-cover bg-gray-50 rounded"/></div></div></div><script>async function generate(){const t=document.getElementById("topic").value;const p=document.getElementById("page").value;document.getElementById("log").innerText="Generating...";const r=await fetch("/api/autoposter/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic:t,pageName:p})});const d=await r.json();document.getElementById("caption").value=d.caption||JSON.stringify(d);document.getElementById("img").src=d.imageUrl;document.getElementById("log").innerText="Ready";}async function postNow(){const cap=document.getElementById("caption").value;const p=document.getElementById("page").value;document.getElementById("log").innerText="Posting...";const r=await fetch("/api/autoposter/post-now",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({caption:cap,page:p})});const d=await r.json();document.getElementById("log").innerText=JSON.stringify(d);}</script></body></html>';
-  return c.html(html);
-});
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+<title>Zawaago Autoposter</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body class="bg-gray-100 min-h-screen p-3 md:p-6">
+<div class="max-w-5xl mx-auto">
+  <div class="bg-white p-4 rounded-xl shadow mb-4 flex justify-between items-center">
+    <h1 class="text-xl md:text-2xl font-bold"><i class="fas fa-robot text-blue-600"></i> Zawaago + InnoTech Autoposter</h1>
+    <button onclick="checkHealth()" class="text-xs bg-gray-100 px-3 py-1 rounded">Check Health</button>
+  </div>
 
-// --- Helpers for old template (keep minimal) ---
-async function getSites(env: Env): Promise<Site[]> { return ((await env.AEO_KV.get("sites", "json")) as Site[]) ?? []; }
-function clean(d: string): string { return (d || "").toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*/, "").trim(); }
+  <div class="bg-white p-4 rounded-xl shadow mb-4">
+    <div class="flex flex-wrap gap-2 items-end">
+      <div>
+        <label class="text-xs font-bold text-gray-500">PAGE</label><br>
+        <select id="page" class="border p-2.5 rounded-lg w-36"><option>Zawaago</option><option>InnoTech</option></select>
+      </div>
+      <div class="flex-1 min-w-[200px]">
+        <label class="text-xs font-bold text-gray-500">TOPIC</label><br>
+        <input id="topic" class="border p-2.5 rounded-lg w-full" placeholder="e.g. AI se Manali trip kaise plan kare" value="AI se travel planning">
+      </div>
+      <button id="genBtn" onclick="generate()" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-lg font-bold"><i class="fas fa-magic"></i> Generate</button>
+    </div>
+    <div id="progressWrap" class="hidden mt-4">
+      <div class="w-full bg-gray-200 rounded-full h-2.5"><div id="progressBar" class="bg-blue-600 h-2.5 rounded-full" style="width: 10%"></div></div>
+      <div id="progressText" class="text-xs text-gray-500 mt-1">Starting...</div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div class="bg-white p-4 rounded-xl shadow">
+      <div class="flex justify-between"><label class="text-sm font-bold">Caption</label><span id="modelUsed" class="text-[10px] bg-gray-100 px-2 py-1 rounded"></span></div>
+      <textarea id="caption" class="w-full h-72 border p-3 mt-2 text-sm rounded-lg" placeholder="Caption yahan ayega..."></textarea>
+      <button id="postBtn" onclick="postNow()" class="bg-green-600 hover:bg-green-700 text-white w-full py-3 rounded-lg mt-3 font-bold"><i class="fab fa-facebook"></i> Post Now to Facebook</button>
+      <div id="log" class="text-xs bg-gray-50 p-3 mt-3 rounded-lg break-all whitespace-pre-wrap max-h-40 overflow-auto">Ready to generate...</div>
+    </div>
+    <div class="bg-white p-4 rounded-xl shadow">
+      <label class="text-sm font-bold">Image Preview</label>
+      <img id="img" class="mt-2 w-full h-72 object-cover rounded-lg bg-gray-50 border" />
+      <div class="text-[11px] text-gray-400 mt-2">Image auto from topic (Unsplash style). Aap apni image baad me add kar sakte ho.</div>
+      <button onclick="copyCaption()" class="w-full mt-3 bg-gray-800 text-white py-2 rounded-lg text-sm"><i class="fas fa-copy"></i> Copy Caption</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function setProgress(p, txt){document.getElementById('progressWrap').classList.remove('hidden');document.getElementById('progressBar').style.width=p+'%';document.getElementById('progressText').innerText=txt;}
+function resetProgress(){setTimeout(()=>{document.getElementById('progressWrap').classList.add('hidden');},1500);}
+
+async function checkHealth(){
+  setProgress(20,'Checking health...');
+  try{
+    const r=await fetch('/api/autoposter/health');const d=await r.json();
+    document.getElementById('log').innerText=JSON.stringify(d,null,2);
+    setProgress(100,'Health OK - AI:'+d.ai+' Token:'+d.has_token);
+    resetProgress();
+  }catch(e){document.getElementById('log').innerText='Health Error: '+e.message;setProgress(100,'Error');}
+}
+
+async function generate(){
+  const topic=document.getElementById('topic').value;
+  const page=document.getElementById('page').value;
+  const btn=document.getElementById('genBtn');
+  if(!topic){alert('Topic likho');return;}
+  btn.disabled=true;btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Generating...';
+  setProgress(20,'Connecting AI...');
+  document.getElementById('log').innerText='Generating
