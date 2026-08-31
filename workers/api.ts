@@ -87,23 +87,50 @@ function isZawaagoPrompt(pageName: string) { return pageName.toLowerCase().inclu
 apiRoutes.post("/autoposter/generate-image", async (c) => {
   try {
     const body = await c.req.json() as any;
-    const topic = body.topic || "AI Agents";
-    const imgPrompt = body.imgPrompt || `AI Agents business automation, ${topic}, professional futuristic, minimal`;
-    const result: any = await c.env.AI.run('@cf/black-forest-labs/flux-1-schnell' as any, { prompt: imgPrompt, steps: 4 }, { gateway: { id: "default" } } as any);
+    const topic = body.topic || "AI Agents business dashboard";
+    const customPrompt = body.imgPrompt || "";
+    const finalPrompt = customPrompt || `Professional business illustration of ${topic}, AI agents working, futuristic minimal, 8k, vibrant, clean background`;
+
+    // Try Flux first, then fallback to SDXL
+    const MODELS = [
+      '@cf/black-forest-labs/flux-1-schnell',
+      '@cf/stabilityai/stable-diffusion-xl-base-1.0',
+      '@cf/bytedance/stable-diffusion-xl-lightning'
+    ];
+
     let imageUrl = "";
-    if (result instanceof Uint8Array || result instanceof ArrayBuffer) {
-      const bytes = result instanceof Uint8Array? result : new Uint8Array(result);
-      let binary = "";
-      const chunk = 8192;
-      for (let i = 0; i < bytes.length; i += chunk) {
-        binary += String.fromCharCode.apply(null, Array.from(bytes.slice(i, i + chunk)) as any);
+    let lastErr = "";
+    
+    for (const model of MODELS) {
+      try {
+        const inputs: any = { prompt: finalPrompt };
+        if (model.includes("flux")) inputs.steps = 4;
+        if (model.includes("stable-diffusion")) inputs.num_steps = 20;
+
+        const result: any = await c.env.AI.run(model as any, inputs, { gateway: { id: "default" } } as any);
+        
+        let bytes: Uint8Array | null = null;
+        if (result instanceof Uint8Array) bytes = result;
+        else if (result instanceof ArrayBuffer) bytes = new Uint8Array(result);
+        else if (result && result.byteLength) bytes = new Uint8Array(result);
+        
+        if (bytes && bytes.length > 5000) {
+          // Fast base64
+          let binary = "";
+          for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+          imageUrl = "data:image/png;base64," + btoa(binary);
+          break;
+        }
+      } catch (e: any) {
+        lastErr = e.message;
+        continue;
       }
-      imageUrl = "data:image/png;base64," + btoa(binary);
     }
-    if (!imageUrl) return c.json({ error: "Image generation failed" }, 500);
-    return c.json({ imageUrl: imageUrl });
+
+    if (!imageUrl) return c.json({ error: "Image generation failed", details: lastErr, tried: MODELS }, 500);
+    return c.json({ imageUrl: imageUrl, prompt: finalPrompt });
   } catch (e: any) {
-    return c.json({ error: "Image error", details: e.message }, 500);
+    return c.json({ error: "Image exception", details: e.message }, 500);
   }
 });
 
