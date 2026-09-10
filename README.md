@@ -1,95 +1,85 @@
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/cloudflare/templates/tree/main/ai-brand-visibility-template)
+# Zawaago AI Autoposter
 
-# AI Brand Visibility Template
+AI-assisted social content generation and Facebook publishing for Zawaago and InnoTech.
 
-<!-- dash-content-start -->
+## Current testing scope
 
-Test whether AI models mention your brand when answering relevant queries. Runs prompts through GPT-5.4, Claude Sonnet 4, Gemini 3 Flash, Llama 4, and Mistral — all through Cloudflare AI Gateway. No API keys needed.
+- Generate branded social captions with Workers AI
+- Select Zawaago or InnoTech
+- Select content type and tone
+- Preview/edit generated caption
+- Publish text posts to Facebook using a Page access token via `/me/feed`
+- Publish image posts via `/me/photos` using a publicly accessible image URL
+- System health endpoint
 
-## What it does
+## Stack
 
-- **Multi-site monitoring** — Add multiple domains, each with their own prompts and model configs
-- **5 AI models** — OpenAI GPT-5.4 Nano, Anthropic Claude Sonnet 4, Google Gemini 3 Flash, Meta Llama 4 Scout, Mistral Small 3.1
-- **AI prompt generation** — Workers AI analyzes your site and suggests relevant test prompts
-- **Parallel execution** — Cloudflare Queues fan out model × prompt jobs for fast results
-- **Real-time progress** — Poll-based UI shows results as they complete
-- **CSV export** — Download results filtered by model or prompt
-- **SSR** — React Router 7 + Hono on Cloudflare Workers, server-rendered
+- React 19 + React Router 7
+- Hono on Cloudflare Workers
+- Cloudflare Workers AI
+- TypeScript
+- Wrangler
 
-<!-- dash-content-end -->
-
-## Prerequisites
-
-1. **Cloudflare account** — [Sign up](https://dash.cloudflare.com/sign-up)
-2. **Unified Billing credits** — Third-party models (OpenAI, Anthropic, Google) are billed through [AI Gateway Unified Billing](https://developers.cloudflare.com/ai-gateway/features/unified-billing/). Load credits in the [Cloudflare dashboard](https://dash.cloudflare.com/?to=/:account/ai/ai-gateway).
-3. **Node.js >= 22** — Required for Wrangler
-
-> Workers AI models (`@cf/` prefix) use standard [Workers AI pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/) and do not require Unified Billing credits.
-
-## Setup
+## Local development
 
 ```bash
-git clone https://github.com/cloudflare/ai-brand-visibility-template
-cd ai-brand-visibility-template
 npm install
+npm run dev
+```
 
-npx wrangler login
-npx wrangler kv namespace create AEO_KV       # Replace the example ID in wrangler.jsonc
-npx wrangler queues create brand-visibility-jobs
+## Build and deploy
 
+```bash
+npm run typecheck
+npm run build
 npm run deploy
 ```
 
-## Development
+## Cloudflare variables
 
-```bash
-npm run dev      # Local dev server with hot reload
-npm run build    # Production build
-npm run deploy   # Build + deploy to Cloudflare
+Configure these as Worker secrets/variables; never commit real values:
+
+- `FB_TOKEN` — Facebook Page access token used for testing
+- `PAGE_ID_ZAWAAGO` — Zawaago Facebook Page ID
+- `PAGE_ID_INNOTECH` — InnoTech Facebook Page ID
+
+## Facebook test endpoints
+
+### Text
+`POST /api/autoposter/post-now`
+
+```json
+{
+  "page": "Zawaago",
+  "caption": "Test post from Zawaago Autoposter",
+  "withImage": false
+}
 ```
 
-## Architecture
+The current testing implementation posts to Graph API `v20.0/me/feed` using the configured Page access token.
 
-```
-workers/
-  app.ts          — Hono entry: API routes + React Router SSR + Queue consumer
-  api.ts          — All /api/* endpoints
-  queue.ts        — Queue consumer for parallel model inference
-app/
-  routes/
-    layout.tsx    — Dashboard shell (header + sidebar)
-    results.tsx   — Results + filters + pagination (index page)
-    prompts.tsx   — Prompt management + AI generation
-    models.tsx    — Model selection per site
-    setup.tsx     — Wizard: site → competitors → prompts → models
-  components/     — UI components (Cloudflare dashboard style)
-src/
-  config.ts       — Model definitions, settings
+### Image
+
+```json
+{
+  "page": "Zawaago",
+  "caption": "Test image post",
+  "imageUrl": "https://example.com/public-image.jpg",
+  "withImage": true
+}
 ```
 
-## Models
+The current testing implementation posts to `v20.0/me/photos`. The image URL must be publicly fetchable by Facebook; browser-only/data URLs are not suitable for this test path.
 
-All models run through `env.AI.run()` with AI Gateway. No provider API keys required.
+## Production roadmap
 
-| Model             | Provider             | Billing            |
-| ----------------- | -------------------- | ------------------ |
-| GPT-5.4 Nano      | OpenAI               | Unified Billing    |
-| Claude Sonnet 4   | Anthropic            | Unified Billing    |
-| Gemini 3 Flash    | Google               | Unified Billing    |
-| Llama 4 Scout 17B | Meta (Workers AI)    | Workers AI pricing |
-| Mistral Small 3.1 | Mistral (Workers AI) | Workers AI pricing |
-
-## Cost
-
-Each test runs 5 models × N prompts. With 5 prompts, that's 25 inference calls per test.
-
-- **GPT-5.4 Nano** — Cheapest OpenAI option, optimized for edge
-- **Claude Sonnet 4** — Mid-tier Anthropic pricing
-- **Gemini 3 Flash** — Google's fast/cheap option
-- **Workers AI models** — Usage-based, see [pricing](https://developers.cloudflare.com/workers-ai/platform/pricing/)
-
-Check [AI Gateway pricing](https://dash.cloudflare.com/?to=/:account/ai/ai-gateway) for current rates.
-
-## License
-
-MIT
+1. Stabilize and verify Facebook publishing.
+2. Remove remaining unused template files/dependencies.
+3. Add authentication and authorization.
+4. Add D1 for content, schedules, accounts, publish attempts and audit history.
+5. Add R2 for generated media.
+6. Add scheduled publishing with Cron + Queue.
+7. Add retries, idempotency and failure recovery.
+8. Add platform adapters for Instagram, LinkedIn and X.
+9. Add content calendar, analytics and approval workflow.
+10. Add monitoring, rate limits, tests and production security hardening.
