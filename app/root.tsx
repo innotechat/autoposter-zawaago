@@ -10,7 +10,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>Zawaago Autoposter</title>
         <meta name="description" content="AI-powered social content generation and Facebook publishing for Zawaago and InnoTech." />
-        <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+        <link rel="apple-touch-icon" href="/favicon.svg" />
         <Meta />
         <Links />
       </head>
