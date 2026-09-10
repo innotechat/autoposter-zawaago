@@ -5,5 +5,15 @@
   "main": "./workers/app.ts",
   "upload_source_maps": true,
   "observability": { "enabled": true },
-  "ai": { "binding": "AI" }
+  "ai": { "binding": "AI" },
+  "r2_buckets": [
+    {
+      "binding": "ASSETS",
+      "bucket_name": "zawaago-autoposter-assets"
+    }
+  ],
+  "vars": {
+    "PAGE_ID_ZAWAAGO": "113167943749510",
+    "PAGE_ID_INNOTECH": "102440764818837"
+  }
 }
