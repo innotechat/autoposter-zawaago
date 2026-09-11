@@ -2,7 +2,6 @@ import { Hono } from "hono";
 
 type Env = {
   AI: Ai;
-  FB_TOKEN?: string;
   FB_TOKEN_ZAWAAGO?: string;
   FB_TOKEN_INNOTECH?: string;
   PAGE_ID_ZAWAAGO: string;
@@ -38,9 +37,6 @@ function getPageToken(page: string, env: Env): string {
   const isInnoTech = page.toLowerCase() === "innotech";
   const token = isInnoTech ? env.FB_TOKEN_INNOTECH : env.FB_TOKEN_ZAWAAGO;
   if (token?.trim()) return token.trim();
-
-  // Backward compatibility for the original single-token setup.
-  if (env.FB_TOKEN?.trim()) return env.FB_TOKEN.trim();
 
   throw new Error(`Facebook Page token is not configured for ${isInnoTech ? "InnoTech" : "Zawaago"}. Add FB_TOKEN_${isInnoTech ? "INNOTECH" : "ZAWAAGO"} in Cloudflare Worker secrets.`);
 }
@@ -180,11 +176,11 @@ apiRoutes.get("/autoposter/health", (c) => c.json({
   mode: "production-ready",
   graphVersion: GRAPH_VERSION,
   aiConfigured: !!c.env.AI,
-  facebookTokenConfigured: !!(c.env.FB_TOKEN || c.env.FB_TOKEN_ZAWAAGO || c.env.FB_TOKEN_INNOTECH),
+  facebookTokenConfigured: !!(c.env.FB_TOKEN_ZAWAAGO || c.env.FB_TOKEN_INNOTECH),
   zawaagoPageConfigured: !!c.env.PAGE_ID_ZAWAAGO,
   innotechPageConfigured: !!c.env.PAGE_ID_INNOTECH,
-  zawaagoFacebookTokenConfigured: !!(c.env.FB_TOKEN_ZAWAAGO || c.env.FB_TOKEN),
-  innotechFacebookTokenConfigured: !!(c.env.FB_TOKEN_INNOTECH || c.env.FB_TOKEN),
+  zawaagoFacebookTokenConfigured: !!c.env.FB_TOKEN_ZAWAAGO,
+  innotechFacebookTokenConfigured: !!c.env.FB_TOKEN_INNOTECH,
   imageStorageConfigured: !!c.env.ASSETS,
   timestamp: new Date().toISOString(),
 }));
