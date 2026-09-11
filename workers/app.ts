@@ -21,7 +21,7 @@ app.get("*", (c) => {
     import.meta.env.MODE,
   );
   return requestHandler(c.req.raw, {
-    cloudflare: { env: c.env, ctx: c.executionCtx },
+    cloudflare: { env: c.env as any, ctx: c.executionCtx as any },
   });
 });
 
