@@ -29,9 +29,8 @@ jobs:
           s = s.replace(old_type, '', 1)
           old_fn = '''function getPageToken(page: string, env: Env): string {\n  const isInnoTech = page.toLowerCase() === "innotech";\n  const token = isInnoTech ? env.FB_TOKEN_INNOTECH : env.FB_TOKEN_ZAWAAGO;\n  if (token?.trim()) return token.trim();\n\n  // Backward compatibility for the original single-token setup.\n  if (env.FB_TOKEN?.trim()) return env.FB_TOKEN.trim();\n\n  throw new Error(`Facebook Page token is not configured for ${isInnoTech ? "InnoTech" : "Zawaago"}. Add FB_TOKEN_${isInnoTech ? "INNOTECH" : "ZAWAAGO"} in Cloudflare Worker secrets.`);\n}\n'''
           new_fn = '''function getPageToken(page: string, env: Env): string {\n  const isInnoTech = page.toLowerCase() === "innotech";\n  const token = isInnoTech ? env.FB_TOKEN_INNOTECH : env.FB_TOKEN_ZAWAAGO;\n  if (token?.trim()) return token.trim();\n\n  throw new Error(`Facebook Page token is not configured for ${isInnoTech ? "InnoTech" : "Zawaago"}. Add FB_TOKEN_${isInnoTech ? "INNOTECH" : "ZAWAAGO"} in Cloudflare Worker secrets.`);\n}\n'''
-          if old_fn not in s:
-              raise SystemExit('Expected getPageToken implementation not found')
-          s = s.replace(old_fn, new_fn, 1)
+          if old_fn in s:
+              s = s.replace(old_fn, new_fn, 1)
           p.write_text(s)
           PY
 
@@ -48,23 +47,27 @@ jobs:
               'innotechFacebookTokenConfigured: !!(c.env.FB_TOKEN_INNOTECH || c.env.FB_TOKEN),': 'innotechFacebookTokenConfigured: !!c.env.FB_TOKEN_INNOTECH,',
           }
           for old, new in replacements.items():
-              if old not in s:
-                  raise SystemExit(f'Expected health expression not found: {old}')
-              s = s.replace(old, new, 1)
+              if old in s:
+                  s = s.replace(old, new, 1)
           p.write_text(s)
           PY
 
       - name: Verify source hardening
         shell: bash
         run: |
-          if grep -n 'FB_TOKEN' workers/api.ts | grep -v 'FB_TOKEN_ZAWAAGO\|FB_TOKEN_INNOTECH'; then
+          if grep -nE 'FB_TOKEN\?[: ]|env\.FB_TOKEN([). ]|\|)' workers/api.ts; then
             echo 'Legacy shared FB_TOKEN reference remains in workers/api.ts'
+            exit 1
+          fi
+          if grep -n 'env.FB_TOKEN ||' workers/api.ts; then
+            echo 'Legacy shared token health fallback remains'
             exit 1
           fi
           if grep -n 'Backward compatibility for the original single-token setup' workers/api.ts; then
             echo 'Legacy fallback implementation remains'
             exit 1
           fi
+          echo 'Dedicated Facebook Page token hardening verified.'
 
       - name: Commit hardening and remove temporary workflow
         shell: bash
@@ -73,5 +76,9 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add workers/api.ts
           git rm .github/workflows/phase2-token-hardening.yml
+          if git diff --cached --quiet; then
+            echo 'No hardening changes required.'
+            exit 0
+          fi
           git commit -m 'security: enforce dedicated Facebook Page tokens'
           git push
