@@ -1,0 +1,77 @@
+name: Phase 2 Token Hardening
+
+on:
+  push:
+    branches:
+      - phase-2-production-hardening
+
+permissions:
+  contents: write
+
+jobs:
+  harden-facebook-tokens:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Remove shared Facebook token fallback
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('workers/api.ts')
+          s = p.read_text()
+          old_type = '''  FB_TOKEN?: string;\n'''
+          if old_type not in s:
+              raise SystemExit('Expected FB_TOKEN type declaration not found')
+          s = s.replace(old_type, '', 1)
+          old_fn = '''function getPageToken(page: string, env: Env): string {\n  const isInnoTech = page.toLowerCase() === "innotech";\n  const token = isInnoTech ? env.FB_TOKEN_INNOTECH : env.FB_TOKEN_ZAWAAGO;\n  if (token?.trim()) return token.trim();\n\n  // Backward compatibility for the original single-token setup.\n  if (env.FB_TOKEN?.trim()) return env.FB_TOKEN.trim();\n\n  throw new Error(`Facebook Page token is not configured for ${isInnoTech ? "InnoTech" : "Zawaago"}. Add FB_TOKEN_${isInnoTech ? "INNOTECH" : "ZAWAAGO"} in Cloudflare Worker secrets.`);\n}\n'''
+          new_fn = '''function getPageToken(page: string, env: Env): string {\n  const isInnoTech = page.toLowerCase() === "innotech";\n  const token = isInnoTech ? env.FB_TOKEN_INNOTECH : env.FB_TOKEN_ZAWAAGO;\n  if (token?.trim()) return token.trim();\n\n  throw new Error(`Facebook Page token is not configured for ${isInnoTech ? "InnoTech" : "Zawaago"}. Add FB_TOKEN_${isInnoTech ? "INNOTECH" : "ZAWAAGO"} in Cloudflare Worker secrets.`);\n}\n'''
+          if old_fn not in s:
+              raise SystemExit('Expected getPageToken implementation not found')
+          s = s.replace(old_fn, new_fn, 1)
+          p.write_text(s)
+          PY
+
+      - name: Remove legacy token health fallback
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('workers/api.ts')
+          s = p.read_text()
+          replacements = {
+              'facebookTokenConfigured: !!(c.env.FB_TOKEN || c.env.FB_TOKEN_ZAWAAGO || c.env.FB_TOKEN_INNOTECH),': 'facebookTokenConfigured: !!(c.env.FB_TOKEN_ZAWAAGO || c.env.FB_TOKEN_INNOTECH),',
+              'zawaagoFacebookTokenConfigured: !!(c.env.FB_TOKEN_ZAWAAGO || c.env.FB_TOKEN),': 'zawaagoFacebookTokenConfigured: !!c.env.FB_TOKEN_ZAWAAGO,',
+              'innotechFacebookTokenConfigured: !!(c.env.FB_TOKEN_INNOTECH || c.env.FB_TOKEN),': 'innotechFacebookTokenConfigured: !!c.env.FB_TOKEN_INNOTECH,',
+          }
+          for old, new in replacements.items():
+              if old not in s:
+                  raise SystemExit(f'Expected health expression not found: {old}')
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
+      - name: Verify source hardening
+        shell: bash
+        run: |
+          if grep -n 'FB_TOKEN' workers/api.ts | grep -v 'FB_TOKEN_ZAWAAGO\|FB_TOKEN_INNOTECH'; then
+            echo 'Legacy shared FB_TOKEN reference remains in workers/api.ts'
+            exit 1
+          fi
+          if grep -n 'Backward compatibility for the original single-token setup' workers/api.ts; then
+            echo 'Legacy fallback implementation remains'
+            exit 1
+          fi
+
+      - name: Commit hardening and remove temporary workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add workers/api.ts
+          git rm .github/workflows/phase2-token-hardening.yml
+          git commit -m 'security: enforce dedicated Facebook Page tokens'
+          git push
