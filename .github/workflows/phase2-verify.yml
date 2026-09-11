@@ -1,0 +1,22 @@
+name: Phase 2 Verify
+
+on:
+  push:
+    branches: [phase-2-production-hardening]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: |
+          test -f workers/api.ts
+          ! grep -q 'FB_TOKEN?:' workers/api.ts
+          ! grep -q 'env.FB_TOKEN[^_]' workers/api.ts
