@@ -29,16 +29,39 @@ type Brief = {
   customPrompt?: string;
 };
 
+function normalizePage(page: string): "Zawaago" | "InnoTech" {
+  const normalized = page.trim().toLowerCase();
+  if (normalized === "zawaago") return "Zawaago";
+  if (normalized === "innotech" || normalized === "inno tech") return "InnoTech";
+  throw new Error("Unsupported Facebook Page. Select Zawaago or InnoTech.");
+}
+
+function getPageConfig(page: string, env: Env) {
+  const selected = normalizePage(page);
+  if (selected === "InnoTech") {
+    if (!env.PAGE_ID_INNOTECH?.trim()) throw new Error("Page ID is not configured for InnoTech.");
+    return {
+      name: selected,
+      id: env.PAGE_ID_INNOTECH.trim(),
+      token: env.FB_TOKEN_INNOTECH?.trim() || "",
+    };
+  }
+  if (!env.PAGE_ID_ZAWAAGO?.trim()) throw new Error("Page ID is not configured for Zawaago.");
+  return {
+    name: selected,
+    id: env.PAGE_ID_ZAWAAGO.trim(),
+    token: env.FB_TOKEN_ZAWAAGO?.trim() || "",
+  };
+}
+
 function getPageId(page: string, env: Env): string {
-  return page.toLowerCase() === "innotech" ? env.PAGE_ID_INNOTECH : env.PAGE_ID_ZAWAAGO;
+  return getPageConfig(page, env).id;
 }
 
 function getPageToken(page: string, env: Env): string {
-  const isInnoTech = page.toLowerCase() === "innotech";
-  const token = isInnoTech ? env.FB_TOKEN_INNOTECH : env.FB_TOKEN_ZAWAAGO;
-  if (token?.trim()) return token.trim();
-
-  throw new Error(`Facebook Page token is not configured for ${isInnoTech ? "InnoTech" : "Zawaago"}. Add FB_TOKEN_${isInnoTech ? "INNOTECH" : "ZAWAAGO"} in Cloudflare Worker secrets.`);
+  const config = getPageConfig(page, env);
+  if (config.token) return config.token;
+  throw new Error(`Facebook Page token is not configured for ${config.name}. Add FB_TOKEN_${config.name.toUpperCase()} in Cloudflare Worker secrets.`);
 }
 
 function brandProfile(pageName: string) {
@@ -119,6 +142,15 @@ async function generateCaption(env: Env, brief: Brief) {
   throw new Error(lastError || "AI failed to generate caption");
 }
 
+function facebookError(data: any, status: number, kind: "feed" | "photo") {
+  const code = data?.error?.code;
+  const message = data?.error?.message;
+  if (code === 200) return "Facebook rejected the Page token or its permissions for the selected Page.";
+  if (code === 10) return `Facebook rejected this ${kind} operation. Verify the selected Page token has publishing permission.`;
+  if (code === 190) return "Facebook rejected the Page token because it is invalid or expired. Refresh the Page credential.";
+  return message || `Facebook ${kind} API request failed (${status})`;
+}
+
 async function postToFacebook(caption: string, env: Env, pageId: string, pageToken: string) {
   if (!caption?.trim()) throw new Error("Caption is empty");
   const fbUrl = `${GRAPH_BASE}/${encodeURIComponent(pageId)}/feed`;
@@ -126,28 +158,34 @@ async function postToFacebook(caption: string, env: Env, pageId: string, pageTok
   form.append("message", caption.trim());
   form.append("access_token", pageToken);
   const response = await fetch(fbUrl, { method: "POST", body: form });
-  const data: any = await response.json();
-  if (!response.ok || data?.error) {
-    const code = data?.error?.code;
-    if (code === 200) throw new Error("Facebook rejected the Page token or its permissions for the selected Page.");
-    if (code === 10) throw new Error("Facebook rejected this feed operation. Verify the selected Page token has publishing permission.");
-    throw new Error(data?.error?.message || `Facebook API request failed (${response.status})`);
-  }
+  const data: any = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) throw new Error(facebookError(data, response.status, "feed"));
   return { id: data.id, pageId, endpoint: `/${pageId}/feed` };
+}
+
+async function validatePublicImageUrl(imageUrl: string) {
+  if (!/^https?:\/\//i.test(imageUrl)) throw new Error("Image URL must be a public HTTP(S) URL before Facebook publishing.");
+  if (imageUrl.startsWith("data:")) throw new Error("The image is not publicly hosted yet. Configure the image storage binding before publishing it to Facebook.");
+  const response = await fetch(imageUrl, { method: "HEAD", redirect: "follow" });
+  if (!response.ok) throw new Error(`Image could not be verified for Facebook (${response.status}). Regenerate the image and try again.`);
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.toLowerCase().startsWith("image/")) throw new Error("The selected asset is not an image. Generate a valid image before publishing.");
+  const length = Number(response.headers.get("content-length") || "0");
+  if (length > 0 && length < 1000) throw new Error("The selected image asset is unexpectedly small. Regenerate the image before publishing.");
 }
 
 async function postImageToFacebook(caption: string, imageUrl: string, env: Env, pageId: string, pageToken: string) {
   if (!caption?.trim()) throw new Error("Caption is empty");
   if (!imageUrl?.trim()) throw new Error("Image URL is empty");
-  if (imageUrl.startsWith("data:")) throw new Error("The image is not publicly hosted yet. Configure the image storage binding before publishing it to Facebook.");
+  await validatePublicImageUrl(imageUrl.trim());
   const fbUrl = `${GRAPH_BASE}/${encodeURIComponent(pageId)}/photos`;
   const form = new URLSearchParams();
   form.append("caption", caption.trim());
   form.append("url", imageUrl.trim());
   form.append("access_token", pageToken);
   const response = await fetch(fbUrl, { method: "POST", body: form });
-  const data: any = await response.json();
-  if (!response.ok || data?.error) throw new Error(data?.error?.message || `Facebook image API request failed (${response.status})`);
+  const data: any = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) throw new Error(facebookError(data, response.status, "photo"));
   return { ...data, pageId, endpoint: `/${pageId}/photos` };
 }
 
@@ -213,6 +251,7 @@ apiRoutes.post("/autoposter/generate", async (c) => {
       cta: String(body.cta || "").trim(),
       customPrompt: String(body.customPrompt || "").trim(),
     };
+    normalizePage(brief.pageName);
     const result = await generateCaption(c.env, brief);
     return c.json({ ...result, imagePrompt: buildImagePrompt(brief), topic: brief.topic, pageName: brief.pageName, contentType: brief.contentType, tone: brief.tone });
   } catch (error) {
@@ -237,6 +276,7 @@ apiRoutes.post("/autoposter/generate-image", async (c) => {
       cta: String(body.cta || "None").trim(),
       customPrompt: String(body.imgPrompt || body.customPrompt || "").trim(),
     };
+    normalizePage(brief.pageName);
     const finalPrompt = buildImagePrompt(brief);
 
     try {
@@ -271,11 +311,9 @@ apiRoutes.post("/autoposter/post-now", async (c) => {
     const page = String(body.page || "Zawaago").trim();
     const imageUrl = String(body.imageUrl || "").trim();
     const withImage = Boolean(body.withImage);
-    const pageId = getPageId(page, c.env);
-    if (!pageId) return c.json({ error: `Page ID is not configured for ${page}` }, 400);
-    const pageToken = getPageToken(page, c.env);
-    if (withImage) return c.json({ ...(await postImageToFacebook(caption, imageUrl, c.env, pageId, pageToken)), postedAs: "photo" });
-    return c.json({ ...(await postToFacebook(caption, c.env, pageId, pageToken)), postedAs: "feed" });
+    const config = getPageConfig(page, c.env);
+    if (withImage) return c.json({ ...(await postImageToFacebook(caption, imageUrl, c.env, config.id, config.token || getPageToken(page, c.env))), postedAs: "photo", page: config.name });
+    return c.json({ ...(await postToFacebook(caption, c.env, config.id, config.token || getPageToken(page, c.env))), postedAs: "feed", page: config.name });
   } catch (error) {
     return c.json({ error: "Facebook post failed", details: error instanceof Error ? error.message : String(error) }, 500);
   }
