@@ -4,9 +4,11 @@ import { apiRoutes } from "./api";
 
 type Env = {
   AI: Ai;
-  FB_TOKEN: string;
+  FB_TOKEN_ZAWAAGO?: string;
+  FB_TOKEN_INNOTECH?: string;
   PAGE_ID_ZAWAAGO: string;
   PAGE_ID_INNOTECH: string;
+  ASSETS?: R2Bucket;
 };
 
 const app = new Hono<{ Bindings: Env }>();
