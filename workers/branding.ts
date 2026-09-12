@@ -27,17 +27,20 @@ brandingRoutes.post("/autoposter/assets/brand", async (c) => {
     const file = form.file;
     const brandValue = typeof form.pageName === "string" ? form.pageName : "";
 
-    if (!(file instanceof File)) return c.json({ error: "Branded image file is required" }, 400);
+    if (!file || typeof file === "string" || Array.isArray(file) || typeof (file as any).arrayBuffer !== "function") {
+      return c.json({ error: "Branded image file is required" }, 400);
+    }
+    const uploadedFile = file as Blob & { type: string; size: number };
     const brand = normalizeBrand(brandValue);
-    const contentType = file.type.toLowerCase();
+    const contentType = uploadedFile.type.toLowerCase();
     if (!["image/jpeg", "image/png", "image/webp"].includes(contentType)) {
       return c.json({ error: "Only JPEG, PNG or WebP branded assets are accepted" }, 400);
     }
-    if (file.size < 1000) return c.json({ error: "Branded image is unexpectedly small" }, 400);
-    if (file.size > 12 * 1024 * 1024) return c.json({ error: "Branded image exceeds the 12 MB limit" }, 413);
+    if (uploadedFile.size < 1000) return c.json({ error: "Branded image is unexpectedly small" }, 400);
+    if (uploadedFile.size > 12 * 1024 * 1024) return c.json({ error: "Branded image exceeds the 12 MB limit" }, 413);
 
     const key = `generated/${brand}/branded/${Date.now()}-${crypto.randomUUID()}.${extensionFor(contentType)}`;
-    await c.env.ASSETS.put(key, await file.arrayBuffer(), {
+    await c.env.ASSETS.put(key, await uploadedFile.arrayBuffer(), {
       httpMetadata: {
         contentType,
         cacheControl: "public, max-age=31536000, immutable",
