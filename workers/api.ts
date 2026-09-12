@@ -288,7 +288,6 @@ apiRoutes.post("/autoposter/generate-image", async (c) => {
         const result: any = await c.env.AI.run("@cf/black-forest-labs/flux-1-schnell" as any, {
           prompt: finalPrompt,
           steps: 8,
-          seed: Math.floor(Math.random() * 2147483647),
         });
         const bytes = imageBytesFromResult(result);
         if (!bytes || bytes.length <= 1000) {
