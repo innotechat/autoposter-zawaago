@@ -9,15 +9,15 @@ permissions:
 
 jobs:
   patch:
-    if: ${{ !contains(github.event.head_commit.message, 'fix: enforce Flux prompt limit') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Bound Flux image prompt to model limit
-        shell: python {0}
+      - name: Patch Flux prompt limit and remove this workflow
+        shell: bash
         run: |
+          python3 - <<'PY'
           from pathlib import Path
           import re
 
@@ -52,8 +52,6 @@ jobs:
               custom ? `Additional creative direction: ${custom}.` : "",
             ].filter(Boolean).join(" ");
 
-            // Cloudflare Flux rejects prompts longer than 2048 characters.
-            // Keep a safety margin so future UI additions cannot break generation.
             return prompt.slice(0, 1800).trim();
           }'''
 
@@ -62,14 +60,12 @@ jobs:
           if count != 1:
               raise SystemExit("Could not locate buildImagePrompt in workers/api.ts")
           path.write_text(new_text, encoding="utf-8")
-          print("Patched workers/api.ts: Flux prompt is now capped at 1800 characters.")
+          print("Patched workers/api.ts: Flux prompt capped at 1800 characters.")
+          PY
 
-      - name: Commit patch
-        shell: bash
-        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add workers/api.ts
-          git diff --cached --quiet && { echo "No changes needed"; exit 0; }
+          git rm .github/workflows/one-time-flux-prompt-fix.yml
           git commit -m "fix: enforce Flux prompt limit"
           git push
