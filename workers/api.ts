@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { writeHistory } from "./history";
+import { writeHistory, sanitizeHistoryError } from "./history";
 
 type Env = {
   AI: Ai;
@@ -149,6 +149,14 @@ async function storeImage(env: Env, bytes: Uint8Array, request: Request, pageNam
   return `${new URL(request.url).origin}/api/autoposter/assets/${encodeURIComponent(key)}`;
 }
 
+async function persistHistory(env: Env, record: Parameters<typeof writeHistory>[1]) {
+  try {
+    await writeHistory(env, record);
+  } catch (error) {
+    console.error("History persistence failed", sanitizeHistoryError(error));
+  }
+}
+
 apiRoutes.get("/autoposter/health", (c) => c.json({ status: "ok", service: "Zawaago Autoposter", mode: "production-ready", graphVersion: GRAPH_VERSION, aiConfigured: !!c.env.AI, facebookTokenConfigured: !!(c.env.FB_TOKEN_ZAWAAGO || c.env.FB_TOKEN_INNOTECH), zawaagoPageConfigured: !!c.env.PAGE_ID_ZAWAAGO, innotechPageConfigured: !!c.env.PAGE_ID_INNOTECH, zawaagoFacebookTokenConfigured: !!c.env.FB_TOKEN_ZAWAAGO, innotechFacebookTokenConfigured: !!c.env.FB_TOKEN_INNOTECH, imageStorageConfigured: !!c.env.ASSETS, timestamp: new Date().toISOString() }));
 
 apiRoutes.get("/autoposter/assets/*", async (c) => {
@@ -215,11 +223,11 @@ apiRoutes.post("/autoposter/post-now", async (c) => {
       status: "published" as const,
       createdAt: new Date().toISOString(),
     };
-    await writeHistory(c.env, record);
+    await persistHistory(c.env, record);
     return c.json({ ...result, postedAs: withImage ? "photo" : "feed", page: config.name, historyId: id });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await writeHistory(c.env, { id, pageName: config.name, pageId: config.id, contentType: withImage ? "image" : "text", caption, ...(imageUrl ? { imageUrl } : {}), status: "failed", createdAt: new Date().toISOString(), error: message.slice(0, 500) });
+    await persistHistory(c.env, { id, pageName: config.name, pageId: config.id, contentType: withImage ? "image" : "text", caption, ...(imageUrl ? { imageUrl } : {}), status: "failed", createdAt: new Date().toISOString(), error: sanitizeHistoryError(message) });
     return c.json({ error: "Facebook post failed", details: message, historyId: id }, 500);
   }
 });
