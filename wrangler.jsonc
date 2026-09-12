@@ -5,6 +5,7 @@
   "main": "./workers/app.ts",
   "upload_source_maps": true,
   "observability": { "enabled": true },
+  "triggers": { "crons": ["* * * * *"] },
   "ai": { "binding": "AI" },
   "r2_buckets": [
     {
