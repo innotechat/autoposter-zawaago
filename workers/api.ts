@@ -69,22 +69,26 @@ function buildImagePrompt(brief: Brief): string {
   const branding = brief.branding || "Subtle watermark";
   const position = brief.logoPosition || "Bottom Right";
   const cta = brief.cta || "None";
-  return [
+  const custom = brief.customPrompt?.trim().replace(/\s+/g, " ").slice(0, 600);
+
+  const prompt = [
     `Create a premium social media visual for ${brand.name}.`,
-    `Core subject: ${brief.topic}.`,
-    `Content direction: ${brief.contentType}.`,
-    `Target audience: ${audience}.`,
-    `Language context: ${language}.`,
-    `Visual style: ${style}.`,
+    `Subject: ${brief.topic.slice(0, 500)}.`,
+    `Content direction: ${brief.contentType.slice(0, 180)}.`,
+    `Audience: ${audience.slice(0, 180)}.`,
+    `Language context: ${language.slice(0, 80)}.`,
+    `Visual style: ${style.slice(0, 180)}.`,
     `Brand character: ${brand.description}; ${brand.visual}.`,
     `Composition: ${ratio}; strong focal subject; balanced negative space; professional hierarchy; mobile-first readability.`,
-    `Branding treatment: ${branding}; logo position ${position}. Do not invent or render fake logos, brand names, URLs or statistics inside the artwork.`,
-    `CTA context: ${cta}.`,
-    `Use realistic lighting, crisp details, clean geometry, premium commercial art direction, high visual quality.`,
-    `Create clean original artwork with no generator watermark, no platform watermark, no signature, no fake logo, no fake UI and no illegible text.`,
+    `Branding: ${branding}; logo position ${position}. Never invent or render fake logos, brand names, URLs or statistics.`,
+    `CTA context: ${cta.slice(0, 120)}.`,
+    `Premium commercial art direction, realistic lighting, crisp details, clean geometry, high visual quality.`,
+    `Original artwork only: no generator watermark, platform watermark, signature, fake logo, fake UI or illegible text.`,
     `Avoid clutter, generic stock-photo look, distorted hands/faces, excessive text and visual noise.`,
-    brief.customPrompt ? `Additional creative direction: ${brief.customPrompt}.` : "",
+    custom ? `Additional creative direction: ${custom}.` : "",
   ].filter(Boolean).join(" ");
+
+  return prompt.slice(0, 1800).trim();
 }
 
 function getPrompt(brief: Brief): string {
