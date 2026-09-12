@@ -6,38 +6,16 @@ import { historyRoutes } from "./history";
 import { brandingRoutes } from "./branding";
 import { seriesRoutes } from "./series";
 import { schedulerRoutes, processDueSchedules } from "./scheduler";
+import { seriesSchedulerRoutes } from "./series-scheduler";
 
-type Env = {
-  AI: Ai;
-  FB_TOKEN_ZAWAAGO?: string;
-  FB_TOKEN_INNOTECH?: string;
-  PAGE_ID_ZAWAAGO: string;
-  PAGE_ID_INNOTECH: string;
-  ASSETS?: R2Bucket;
-};
-
+type Env = { AI: Ai; FB_TOKEN_ZAWAAGO?: string; FB_TOKEN_INNOTECH?: string; PAGE_ID_ZAWAAGO: string; PAGE_ID_INNOTECH: string; ASSETS?: R2Bucket };
 const app = new Hono<{ Bindings: Env }>();
-
 app.route("/api", apiRoutes);
 app.route("/api", galleryRoutes);
 app.route("/api", historyRoutes);
 app.route("/api", brandingRoutes);
 app.route("/api", seriesRoutes);
 app.route("/api", schedulerRoutes);
-
-app.get("*", (c) => {
-  const requestHandler = createRequestHandler(
-    () => import("virtual:react-router/server-build"),
-    import.meta.env.MODE,
-  );
-  return requestHandler(c.req.raw, {
-    cloudflare: { env: c.env as any, ctx: c.executionCtx as any },
-  });
-});
-
-export default {
-  fetch: app.fetch,
-  async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext) {
-    await processDueSchedules(env);
-  },
-};
+app.route("/api", seriesSchedulerRoutes);
+app.get("*", (c) => { const requestHandler = createRequestHandler(() => import("virtual:react-router/server-build"), import.meta.env.MODE); return requestHandler(c.req.raw, { cloudflare: { env: c.env as any, ctx: c.executionCtx as any } }); });
+export default { fetch: app.fetch, async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext) { await processDueSchedules(env); } };
