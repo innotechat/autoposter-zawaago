@@ -88,25 +88,28 @@ export default function BrandedAutoposter() {
       const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
       if (!url.endsWith("/api/autoposter/generate-image") || !response.ok) return response;
 
-      try {
-        const requestBody = typeof init?.body === "string" ? JSON.parse(init.body) : null;
-        const pageName: BrandName = requestBody?.pageName === "InnoTech" ? "InnoTech" : "Zawaago";
-        const branding = String(requestBody?.branding || "Subtle watermark");
-        const logoPosition = String(requestBody?.logoPosition || "Bottom Right");
-        if (branding === "No branding") return response;
+      const requestBody = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+      const pageName: BrandName = requestBody?.pageName === "InnoTech" ? "InnoTech" : "Zawaago";
+      const branding = String(requestBody?.branding || "Subtle watermark");
+      const logoPosition = String(requestBody?.logoPosition || "Bottom Right");
+      if (branding === "No branding") return response;
 
+      try {
         const data: any = await response.clone().json();
-        if (!data?.imageUrl) return response;
+        if (!data?.imageUrl) throw new Error("Generated visual did not return an image URL.");
         const brandedUrl = await applyBranding(data.imageUrl, pageName, branding, logoPosition, originalFetch);
-        const next = { ...data, imageUrl: brandedUrl, source: `${data.source || "generated"}+real-logo-overlay` };
+        const next = { ...data, imageUrl: brandedUrl, source: `${data.source || "generated"}+real-logo-overlay`, brandingApplied: true };
         return new Response(JSON.stringify(next), {
           status: response.status,
           statusText: response.statusText,
           headers: { "Content-Type": "application/json" },
         });
       } catch (error) {
-        console.warn("Real logo overlay failed; keeping the generated visual", error);
-        return response;
+        const message = error instanceof Error ? error.message : String(error);
+        return new Response(JSON.stringify({ error: "Branding failed", details: message }), {
+          status: 502,
+          headers: { "Content-Type": "application/json" },
+        });
       }
     };
 
