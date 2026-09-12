@@ -1,8 +1,8 @@
-name: Phase 2 Gallery Verify
+name: Phase 2 Production Verify
 
 on:
   push:
-    branches: [phase-2-production-hardening]
+    branches: [main]
 
 jobs:
   verify:
@@ -19,10 +19,16 @@ jobs:
       - run: |
           test -f workers/api.ts
           test -f workers/gallery.ts
+          test -f workers/history.ts
           test -f app/routes/gallery.tsx
+          test -f app/routes/history.tsx
           grep -q 'galleryRoutes' workers/app.ts
+          grep -q 'historyRoutes' workers/app.ts
           grep -q '/gallery/assets' workers/gallery.ts
+          grep -q '/history' workers/history.ts
           grep -q 'safeAssetKey' workers/gallery.ts
-          grep -q 'ASSETS' workers/gallery.ts
+          grep -q 'writeHistory' workers/history.ts
+          grep -q 'writeHistory' workers/api.ts
+          grep -q 'ASSETS' workers/history.ts
           ! grep -q 'FB_TOKEN?:' workers/api.ts
           ! grep -q 'env.FB_TOKEN[^_]' workers/api.ts
