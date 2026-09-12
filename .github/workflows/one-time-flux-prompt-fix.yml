@@ -1,0 +1,75 @@
+name: One-time Flux prompt fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, 'fix: enforce Flux prompt limit') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Bound Flux image prompt to model limit
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          path = Path("workers/api.ts")
+          text = path.read_text(encoding="utf-8")
+
+          replacement = '''function buildImagePrompt(brief: Brief): string {
+            const brand = brandProfile(brief.pageName);
+            const language = brief.language || "English";
+            const audience = brief.audience || "business owners and professionals";
+            const style = brief.visualStyle || "Premium Editorial";
+            const ratio = brief.aspectRatio || "Square 1:1";
+            const branding = brief.branding || "Subtle watermark";
+            const position = brief.logoPosition || "Bottom Right";
+            const cta = brief.cta || "None";
+            const custom = brief.customPrompt?.trim().replace(/\\s+/g, " ").slice(0, 600);
+
+            const prompt = [
+              `Create a premium social media visual for ${brand.name}.`,
+              `Subject: ${brief.topic.slice(0, 500)}.`,
+              `Content direction: ${brief.contentType.slice(0, 180)}.`,
+              `Audience: ${audience.slice(0, 180)}.`,
+              `Language context: ${language.slice(0, 80)}.`,
+              `Visual style: ${style.slice(0, 180)}.`,
+              `Brand character: ${brand.description}; ${brand.visual}.`,
+              `Composition: ${ratio}; strong focal subject; balanced negative space; professional hierarchy; mobile-first readability.`,
+              `Branding: ${branding}; logo position ${position}. Never invent or render fake logos, brand names, URLs or statistics.`,
+              `CTA context: ${cta.slice(0, 120)}.`,
+              `Premium commercial art direction, realistic lighting, crisp details, clean geometry, high visual quality.`,
+              `Original artwork only: no generator watermark, platform watermark, signature, fake logo, fake UI or illegible text.`,
+              `Avoid clutter, generic stock-photo look, distorted hands/faces, excessive text and visual noise.`,
+              custom ? `Additional creative direction: ${custom}.` : "",
+            ].filter(Boolean).join(" ");
+
+            // Cloudflare Flux rejects prompts longer than 2048 characters.
+            // Keep a safety margin so future UI additions cannot break generation.
+            return prompt.slice(0, 1800).trim();
+          }'''
+
+          pattern = re.compile(r'function buildImagePrompt\(brief: Brief\): string \{.*?\n\}\n\nfunction getPrompt', re.S)
+          new_text, count = pattern.subn(replacement + "\n\nfunction getPrompt", text, count=1)
+          if count != 1:
+              raise SystemExit("Could not locate buildImagePrompt in workers/api.ts")
+          path.write_text(new_text, encoding="utf-8")
+          print("Patched workers/api.ts: Flux prompt is now capped at 1800 characters.")
+
+      - name: Commit patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add workers/api.ts
+          git diff --cached --quiet && { echo "No changes needed"; exit 0; }
+          git commit -m "fix: enforce Flux prompt limit"
+          git push
