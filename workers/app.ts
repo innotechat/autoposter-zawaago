@@ -4,6 +4,7 @@ import { apiRoutes } from "./api";
 import { galleryRoutes } from "./gallery";
 import { historyRoutes } from "./history";
 import { brandingRoutes } from "./branding";
+import { seriesRoutes } from "./series";
 
 type Env = {
   AI: Ai;
@@ -20,6 +21,7 @@ app.route("/api", apiRoutes);
 app.route("/api", galleryRoutes);
 app.route("/api", historyRoutes);
 app.route("/api", brandingRoutes);
+app.route("/api", seriesRoutes);
 
 app.get("*", (c) => {
   const requestHandler = createRequestHandler(
