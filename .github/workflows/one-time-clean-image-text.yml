@@ -1,0 +1,36 @@
+name: One-time clean image text fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch image prompt
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('workers/api.ts')
+          s = p.read_text()
+          old = '''    `Branding: ${branding}; logo position ${position}. Never invent or render fake logos, brand names, URLs or statistics.`,\n    `CTA context: ${cta.slice(0, 120)}.`,\n    `Premium commercial art direction, realistic lighting, crisp details, clean geometry, high visual quality.`,\n    `Original artwork only: no generator watermark, platform watermark, signature, fake logo, fake UI or illegible text.`,\n'''
+          new = '''    `Branding: ${branding}; logo position ${position}. The real ${brand.name} logo will be overlaid separately after generation; never render any logo, brand name, URL or statistics in the artwork.`,\n    `CTA context: ${cta.slice(0, 120)}. The CTA will be overlaid separately; do not render CTA text in the artwork.`,\n    `Premium commercial art direction, realistic lighting, crisp details, clean geometry, high visual quality.`,\n    `Clean artwork only: render NO text, letters, words, numbers, captions, slogans, logos, watermarks, signatures, fake UI or typography anywhere in the image.`,\n'''
+          if old not in s:
+              raise SystemExit('Expected image prompt block was not found; refusing to modify.')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add workers/api.ts
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: generate clean artwork for real logo overlay"
+          git push
