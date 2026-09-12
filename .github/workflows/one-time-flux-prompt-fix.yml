@@ -33,7 +33,7 @@ jobs:
             const branding = brief.branding || "Subtle watermark";
             const position = brief.logoPosition || "Bottom Right";
             const cta = brief.cta || "None";
-            const custom = brief.customPrompt?.trim().replace(/\\s+/g, " ").slice(0, 600);
+            const custom = brief.customPrompt?.trim().replace(/\s+/g, " ").slice(0, 600);
 
             const prompt = [
               `Create a premium social media visual for ${brand.name}.`,
