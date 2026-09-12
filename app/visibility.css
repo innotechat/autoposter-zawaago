@@ -1,0 +1,41 @@
+.icon-button {
+  min-height: 40px;
+  border-color: #c6c4bf;
+  background: #ffffff;
+  color: #171717;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(0,0,0,.06);
+}
+
+.icon-button svg {
+  color: #171717;
+  flex: 0 0 auto;
+}
+
+.icon-button:hover:not(:disabled) {
+  background: #f7f6f3;
+  border-color: #8e8c86;
+  color: #000;
+}
+
+.icon-button:hover:not(:disabled) svg {
+  color: #000;
+}
+
+.icon-button:focus-visible {
+  outline: 3px solid rgba(23,23,23,.16);
+  outline-offset: 2px;
+}
+
+@media (max-width: 639px) {
+  .studio-header > .flex:last-child {
+    gap: 6px;
+  }
+
+  .icon-button {
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0 10px;
+    justify-content: center;
+  }
+}
