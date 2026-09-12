@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { createRequestHandler } from "react-router";
 import { apiRoutes } from "./api";
+import { galleryRoutes } from "./gallery";
 
 type Env = {
   AI: Ai;
@@ -14,6 +15,7 @@ type Env = {
 const app = new Hono<{ Bindings: Env }>();
 
 app.route("/api", apiRoutes);
+app.route("/api", galleryRoutes);
 
 app.get("*", (c) => {
   const requestHandler = createRequestHandler(
