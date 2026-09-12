@@ -33,26 +33,22 @@ function numberInRange(value: unknown, fallback: number, min: number, max: numbe
   return Number.isFinite(parsed) ? Math.min(max, Math.max(min, Math.round(parsed))) : fallback;
 }
 
-function extractText(result: any): string {
-  return result?.response || result?.result || result?.choices?.[0]?.message?.content || "";
-}
-
-function parseSeries(text: string, expected: number) {
-  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-  try {
-    const parsed = JSON.parse(cleaned);
-    const posts = Array.isArray(parsed) ? parsed : parsed.posts;
-    if (!Array.isArray(posts)) throw new Error("AI did not return a posts array.");
-    return posts.slice(0, expected).map((post: any, index: number) => ({
-      episode: index + 1,
-      title: String(post.title || `Lesson ${index + 1}`).trim(),
-      hook: String(post.hook || "").trim(),
-      caption: String(post.caption || "").trim(),
-      visualPrompt: String(post.visualPrompt || "").trim(),
-    })).filter((post: any) => post.caption.length > 20 && post.visualPrompt.length > 10);
-  } catch {
-    throw new Error("The AI returned an invalid series format. Please generate the series again.");
+function parseSeriesPayload(result: any, expected: number) {
+  const raw = result?.response ?? result?.result ?? result?.choices?.[0]?.message?.content ?? "";
+  let parsed: any = raw;
+  if (typeof raw === "string") {
+    const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+    parsed = JSON.parse(cleaned);
   }
+  const posts = Array.isArray(parsed) ? parsed : parsed?.posts;
+  if (!Array.isArray(posts)) throw new Error("AI did not return a posts array.");
+  return posts.slice(0, expected).map((post: any, index: number) => ({
+    episode: index + 1,
+    title: String(post.title || `Lesson ${index + 1}`).trim(),
+    hook: String(post.hook || "").trim(),
+    caption: String(post.caption || "").trim(),
+    visualPrompt: String(post.visualPrompt || "").trim(),
+  })).filter((post: any) => post.caption.length > 20 && post.visualPrompt.length > 10);
 }
 
 seriesRoutes.post("/autoposter/generate-series", async (c) => {
@@ -99,41 +95,67 @@ Series rules:
 - No invented statistics, fake case studies, exaggerated promises or unsupported claims.
 - Use 3-5 relevant hashtags and include the brand's core hashtags: ${brand.hashtags}.
 - The visualPrompt must describe the image only; do not ask the image model to render the real logo or long text. Keep clean negative space for later logo overlay.
-- Return ONLY valid JSON with this exact shape: {"posts":[{"title":"...","hook":"...","caption":"...","visualPrompt":"..."}]}.
-- Exactly ${brief.seriesLength} posts.`;
+- Return exactly ${brief.seriesLength} posts.`;
 
     const models = ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/meta/llama-3.1-8b-instruct-fp8"];
+    const schema = {
+      type: "json_schema",
+      json_schema: {
+        name: "education_series",
+        schema: {
+          type: "object",
+          properties: {
+            posts: {
+              type: "array",
+              minItems: brief.seriesLength,
+              maxItems: brief.seriesLength,
+              items: {
+                type: "object",
+                properties: {
+                  title: { type: "string" },
+                  hook: { type: "string" },
+                  caption: { type: "string" },
+                  visualPrompt: { type: "string" },
+                },
+                required: ["title", "hook", "caption", "visualPrompt"],
+              },
+            },
+          },
+          required: ["posts"],
+        },
+      },
+    };
+
     let lastError = "";
     for (const model of models) {
       try {
         const result: any = await c.env.AI.run(model as any, {
           messages: [{ role: "user", content: prompt }],
           max_tokens: 3200,
+          temperature: 0.55,
+          response_format: schema,
         });
-        const text = extractText(result);
-        if (text) {
-          const posts = parseSeries(text, brief.seriesLength);
-          if (posts.length === brief.seriesLength) {
-            return c.json({
-              series: posts,
-              seriesLength: brief.seriesLength,
-              intervalHours: brief.intervalHours,
-              pageName: brief.pageName,
-              settings: {
-                contentType: brief.contentType,
-                tone: brief.tone,
-                language: brief.language,
-                audience: brief.audience,
-                visualStyle: brief.visualStyle,
-                aspectRatio: brief.aspectRatio,
-                branding: brief.branding,
-                logoPosition: brief.logoPosition,
-                cta: brief.cta,
-              },
-            });
-          }
-          lastError = `AI returned ${posts.length} valid episodes instead of ${brief.seriesLength}.`;
+        const posts = parseSeriesPayload(result, brief.seriesLength);
+        if (posts.length === brief.seriesLength) {
+          return c.json({
+            series: posts,
+            seriesLength: brief.seriesLength,
+            intervalHours: brief.intervalHours,
+            pageName: brief.pageName,
+            settings: {
+              contentType: brief.contentType,
+              tone: brief.tone,
+              language: brief.language,
+              audience: brief.audience,
+              visualStyle: brief.visualStyle,
+              aspectRatio: brief.aspectRatio,
+              branding: brief.branding,
+              logoPosition: brief.logoPosition,
+              cta: brief.cta,
+            },
+          });
         }
+        lastError = `AI returned ${posts.length} valid episodes instead of ${brief.seriesLength}.`;
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
       }
