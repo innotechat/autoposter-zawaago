@@ -70,7 +70,19 @@ function buildImagePrompt(brief: Brief): string {
   const position = brief.logoPosition || "Bottom Right";
   const cta = brief.cta || "None";
   return [
-    `Create a premium social media visual for ${brand.name}.`, `Core subject: ${brief.topic}.`, `Content direction: ${brief.contentType}.`, `Target audience: ${audience}.`, `Language context: ${language}.`, `Visual style: ${style}.`, `Brand character: ${brand.description}; ${brand.visual}.`, `Composition: ${ratio}; strong focal subject; balanced negative space; professional hierarchy; mobile-first readability.`, `Branding treatment: ${branding}; logo position ${position}. Do not invent or render fake logos, brand names, URLs or statistics inside the artwork.`, `CTA context: ${cta}.`, `Use realistic lighting, crisp details, clean geometry, premium commercial art direction, high visual quality.`, `Avoid clutter, generic stock-photo look, distorted hands/faces, excessive text, watermarks, fake UI, illegible typography and visual noise.`, brief.customPrompt ? `Additional creative direction: ${brief.customPrompt}.` : "",
+    `Create a premium social media visual for ${brand.name}.`,
+    `Core subject: ${brief.topic}.`,
+    `Content direction: ${brief.contentType}.`,
+    `Target audience: ${audience}.`,
+    `Language context: ${language}.`,
+    `Visual style: ${style}.`,
+    `Brand character: ${brand.description}; ${brand.visual}.`,
+    `Composition: ${ratio}; strong focal subject; balanced negative space; professional hierarchy; mobile-first readability.`,
+    `Branding treatment: ${branding}; logo position ${position}. Do not invent or render fake logos, brand names, URLs or statistics inside the artwork.`,
+    `CTA context: ${cta}.`,
+    `Use realistic lighting, crisp details, clean geometry, premium commercial art direction, high visual quality.`,
+    `Avoid clutter, generic stock-photo look, distorted hands/faces, excessive text, watermarks, fake UI, illegible typography and visual noise.`,
+    brief.customPrompt ? `Additional creative direction: ${brief.customPrompt}.` : "",
   ].filter(Boolean).join(" ");
 }
 
@@ -91,7 +103,9 @@ async function generateCaption(env: Env, brief: Brief) {
       const result: any = await env.AI.run(model as any, { messages: [{ role: "user", content: prompt }], max_tokens: 900 });
       const caption = result?.response || result?.result || result?.choices?.[0]?.message?.content || "";
       if (typeof caption === "string" && caption.trim().length > 20) return { caption: caption.trim(), usedModel: model };
-    } catch (error) { lastError = error instanceof Error ? error.message : String(error); }
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
   }
   throw new Error(lastError || "AI failed to generate caption");
 }
@@ -107,7 +121,10 @@ function facebookError(data: any, status: number, kind: "feed" | "photo") {
 
 async function postToFacebook(caption: string, pageId: string, pageToken: string) {
   if (!caption?.trim()) throw new Error("Caption is empty");
-  const response = await fetch(`${GRAPH_BASE}/${encodeURIComponent(pageId)}/feed`, { method: "POST", body: new URLSearchParams({ message: caption.trim(), access_token: pageToken }) });
+  const response = await fetch(`${GRAPH_BASE}/${encodeURIComponent(pageId)}/feed`, {
+    method: "POST",
+    body: new URLSearchParams({ message: caption.trim(), access_token: pageToken }),
+  });
   const data: any = await response.json().catch(() => ({}));
   if (!response.ok || data?.error) throw new Error(facebookError(data, response.status, "feed"));
   return { id: data.id, pageId, endpoint: `/${pageId}/feed` };
@@ -128,7 +145,10 @@ async function postImageToFacebook(caption: string, imageUrl: string, pageId: st
   if (!caption?.trim()) throw new Error("Caption is empty");
   if (!imageUrl?.trim()) throw new Error("Image URL is empty");
   await validatePublicImageUrl(imageUrl.trim());
-  const response = await fetch(`${GRAPH_BASE}/${encodeURIComponent(pageId)}/photos`, { method: "POST", body: new URLSearchParams({ caption: caption.trim(), url: imageUrl.trim(), access_token: pageToken }) });
+  const response = await fetch(`${GRAPH_BASE}/${encodeURIComponent(pageId)}/photos`, {
+    method: "POST",
+    body: new URLSearchParams({ caption: caption.trim(), url: imageUrl.trim(), access_token: pageToken }),
+  });
   const data: any = await response.json().catch(() => ({}));
   if (!response.ok || data?.error) throw new Error(facebookError(data, response.status, "photo"));
   return { ...data, pageId, endpoint: `/${pageId}/photos` };
@@ -137,7 +157,10 @@ async function postImageToFacebook(caption: string, imageUrl: string, pageId: st
 function imageBytesFromResult(result: any): Uint8Array | null {
   if (result instanceof Uint8Array) return result;
   if (result instanceof ArrayBuffer) return new Uint8Array(result);
-  if (typeof result?.image === "string") { const binary = atob(result.image); return Uint8Array.from(binary, (char) => char.codePointAt(0) || 0); }
+  if (typeof result?.image === "string") {
+    const binary = atob(result.image);
+    return Uint8Array.from(binary, (char) => char.codePointAt(0) || 0);
+  }
   return null;
 }
 
@@ -145,7 +168,10 @@ async function storeImage(env: Env, bytes: Uint8Array, request: Request, pageNam
   if (!env.ASSETS) return null;
   const safeBrand = pageName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   const key = `generated/${safeBrand}/${Date.now()}-${crypto.randomUUID()}.jpg`;
-  await env.ASSETS.put(key, bytes, { httpMetadata: { contentType: "image/jpeg", cacheControl: "public, max-age=31536000, immutable" } });
+  await env.ASSETS.put(key, bytes, {
+    httpMetadata: { contentType: "image/jpeg", cacheControl: "public, max-age=31536000, immutable" },
+    customMetadata: { brand: safeBrand, source: "autoposter-generated" },
+  });
   return `${new URL(request.url).origin}/api/autoposter/assets/${encodeURIComponent(key)}`;
 }
 
@@ -157,47 +183,124 @@ async function persistHistory(env: Env, record: Parameters<typeof writeHistory>[
   }
 }
 
-apiRoutes.get("/autoposter/health", (c) => c.json({ status: "ok", service: "Zawaago Autoposter", mode: "production-ready", graphVersion: GRAPH_VERSION, aiConfigured: !!c.env.AI, facebookTokenConfigured: !!(c.env.FB_TOKEN_ZAWAAGO || c.env.FB_TOKEN_INNOTECH), zawaagoPageConfigured: !!c.env.PAGE_ID_ZAWAAGO, innotechPageConfigured: !!c.env.PAGE_ID_INNOTECH, zawaagoFacebookTokenConfigured: !!c.env.FB_TOKEN_ZAWAAGO, innotechFacebookTokenConfigured: !!c.env.FB_TOKEN_INNOTECH, imageStorageConfigured: !!c.env.ASSETS, timestamp: new Date().toISOString() }));
+apiRoutes.get("/autoposter/health", (c) => c.json({
+  status: "ok",
+  service: "Zawaago Autoposter",
+  mode: "production-ready",
+  graphVersion: GRAPH_VERSION,
+  aiConfigured: !!c.env.AI,
+  facebookTokenConfigured: !!(c.env.FB_TOKEN_ZAWAAGO || c.env.FB_TOKEN_INNOTECH),
+  zawaagoPageConfigured: !!c.env.PAGE_ID_ZAWAAGO,
+  innotechPageConfigured: !!c.env.PAGE_ID_INNOTECH,
+  zawaagoFacebookTokenConfigured: !!c.env.FB_TOKEN_ZAWAAGO,
+  innotechFacebookTokenConfigured: !!c.env.FB_TOKEN_INNOTECH,
+  imageStorageConfigured: !!c.env.ASSETS,
+  timestamp: new Date().toISOString(),
+}));
 
 apiRoutes.get("/autoposter/assets/*", async (c) => {
   if (!c.env.ASSETS) return c.text("Image storage is not configured", 503);
   const key = decodeURIComponent(c.req.path.replace("/api/autoposter/assets/", ""));
   const object = await c.env.ASSETS.get(key);
   if (!object) return c.text("Image not found", 404);
-  const headers = new Headers(); object.writeHttpMetadata(headers); headers.set("etag", object.httpEtag);
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("etag", object.httpEtag);
   return new Response(object.body, { headers });
 });
 
 apiRoutes.post("/autoposter/generate", async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
-    const brief: Brief = { topic: String(body.topic || "How AI Agents save time for business owners").trim(), pageName: String(body.pageName || "Zawaago").trim(), contentType: String(body.contentType || "AI Agents & Automation").trim(), tone: String(body.tone || "Professional Hinglish").trim(), language: String(body.language || "").trim(), audience: String(body.audience || "").trim(), visualStyle: String(body.visualStyle || "").trim(), aspectRatio: String(body.aspectRatio || "").trim(), branding: String(body.branding || "").trim(), logoPosition: String(body.logoPosition || "").trim(), cta: String(body.cta || "").trim(), customPrompt: String(body.customPrompt || "").trim() };
+    const brief: Brief = {
+      topic: String(body.topic || "How AI Agents save time for business owners").trim(),
+      pageName: String(body.pageName || "Zawaago").trim(),
+      contentType: String(body.contentType || "AI Agents & Automation").trim(),
+      tone: String(body.tone || "Professional Hinglish").trim(),
+      language: String(body.language || "").trim(),
+      audience: String(body.audience || "").trim(),
+      visualStyle: String(body.visualStyle || "").trim(),
+      aspectRatio: String(body.aspectRatio || "").trim(),
+      branding: String(body.branding || "").trim(),
+      logoPosition: String(body.logoPosition || "").trim(),
+      cta: String(body.cta || "").trim(),
+      customPrompt: String(body.customPrompt || "").trim(),
+    };
     normalizePage(brief.pageName);
     const result = await generateCaption(c.env, brief);
     return c.json({ ...result, imagePrompt: buildImagePrompt(brief), topic: brief.topic, pageName: brief.pageName, contentType: brief.contentType, tone: brief.tone });
-  } catch (error) { return c.json({ error: "Generate failed", details: error instanceof Error ? error.message : String(error) }, 500); }
+  } catch (error) {
+    return c.json({ error: "Generate failed", details: error instanceof Error ? error.message : String(error) }, 500);
+  }
 });
 
 apiRoutes.post("/autoposter/generate-image", async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
-    const brief: Brief = { topic: String(body.topic || "AI Agents business").trim(), pageName: String(body.pageName || "Zawaago").trim(), contentType: String(body.contentType || "AI Agents & Automation").trim(), tone: String(body.tone || "Professional Hinglish").trim(), language: String(body.language || "English").trim(), audience: String(body.audience || "business owners and professionals").trim(), visualStyle: String(body.visualStyle || "Premium Editorial").trim(), aspectRatio: String(body.aspectRatio || "Square 1:1").trim(), branding: String(body.branding || "Subtle watermark").trim(), logoPosition: String(body.logoPosition || "Bottom Right").trim(), cta: String(body.cta || "None").trim(), customPrompt: String(body.imgPrompt || body.customPrompt || "").trim() };
+    const brief: Brief = {
+      topic: String(body.topic || "AI Agents business").trim(),
+      pageName: String(body.pageName || "Zawaago").trim(),
+      contentType: String(body.contentType || "AI Agents & Automation").trim(),
+      tone: String(body.tone || "Professional Hinglish").trim(),
+      language: String(body.language || "English").trim(),
+      audience: String(body.audience || "business owners and professionals").trim(),
+      visualStyle: String(body.visualStyle || "Premium Editorial").trim(),
+      aspectRatio: String(body.aspectRatio || "Square 1:1").trim(),
+      branding: String(body.branding || "Subtle watermark").trim(),
+      logoPosition: String(body.logoPosition || "Bottom Right").trim(),
+      cta: String(body.cta || "None").trim(),
+      customPrompt: String(body.imgPrompt || body.customPrompt || "").trim(),
+    };
     normalizePage(brief.pageName);
     const finalPrompt = buildImagePrompt(brief);
-    try {
-      const result: any = await c.env.AI.run("@cf/black-forest-labs/flux-1-schnell" as any, { prompt: finalPrompt, steps: 8, seed: Math.floor(Math.random() * 2147483647) });
-      const bytes = imageBytesFromResult(result);
-      if (bytes && bytes.length > 1000) {
-        const storedUrl = await storeImage(c.env, bytes, c.req.raw, brief.pageName);
-        if (storedUrl) return c.json({ imageUrl: storedUrl, prompt: finalPrompt, source: "cloudflare-flux-r2" });
-        const binary = String.fromCharCode(...bytes);
-        return c.json({ imageUrl: `data:image/jpeg;base64,${btoa(binary)}`, prompt: finalPrompt, source: "cloudflare-flux" });
+
+    // Prefer Cloudflare Flux. A short retry makes transient AI failures less likely to
+    // push a normal generation request onto the external fallback path.
+    let lastImageError = "";
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const result: any = await c.env.AI.run("@cf/black-forest-labs/flux-1-schnell" as any, {
+          prompt: finalPrompt,
+          steps: 8,
+          seed: Math.floor(Math.random() * 2147483647),
+        });
+        const bytes = imageBytesFromResult(result);
+        if (bytes && bytes.length > 1000) {
+          const storedUrl = await storeImage(c.env, bytes, c.req.raw, brief.pageName);
+          if (storedUrl) return c.json({ imageUrl: storedUrl, prompt: finalPrompt, source: "cloudflare-flux-r2" });
+          const binary = String.fromCharCode(...bytes);
+          return c.json({ imageUrl: `data:image/jpeg;base64,${btoa(binary)}`, prompt: finalPrompt, source: "cloudflare-flux" });
+        }
+        lastImageError = "Cloudflare image model returned no usable image bytes.";
+      } catch (error) {
+        lastImageError = error instanceof Error ? error.message : String(error);
+        console.warn(`Cloudflare image generation attempt ${attempt + 1} failed`, error);
       }
-    } catch (error) { console.warn("Cloudflare image generation failed; using external fallback", error); }
-    const width = brief.aspectRatio?.toLowerCase().includes("landscape") ? 1536 : 1024;
-    const height = brief.aspectRatio?.toLowerCase().includes("portrait") ? 1536 : 1024;
-    return c.json({ imageUrl: `https://image.pollinations.ai/prompt/${encodeURIComponent(finalPrompt)}?width=${width}&height=${height}&nologo=true&seed=${Math.floor(Math.random() * 1000000)}`, prompt: finalPrompt, source: "external-fallback" });
-  } catch (error) { return c.json({ error: "Image generation failed", details: error instanceof Error ? error.message : String(error) }, 500); }
+    }
+
+    // Fallback images are fetched into our R2 bucket before being returned. This is
+    // critical because Facebook cannot reliably consume a transient generator URL.
+    // The UI therefore never receives a publishable external generator URL when R2 is configured.
+    if (!c.env.ASSETS) {
+      throw new Error(lastImageError || "Cloudflare image generation failed and image storage is not configured for fallback assets.");
+    }
+
+    const lowerRatio = brief.aspectRatio.toLowerCase();
+    const width = lowerRatio.includes("landscape") ? 1536 : 1024;
+    const height = lowerRatio.includes("portrait") ? 1536 : 1024;
+    const fallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(finalPrompt)}?width=${width}&height=${height}&nologo=true&seed=${Math.floor(Math.random() * 1000000)}`;
+    const fallbackResponse = await fetch(fallbackUrl, { method: "GET", redirect: "follow" });
+    if (!fallbackResponse.ok) throw new Error(`Image generation fallback failed (${fallbackResponse.status}).`);
+    const fallbackType = (fallbackResponse.headers.get("content-type") || "").toLowerCase();
+    if (!fallbackType.startsWith("image/")) throw new Error("Image generation fallback returned a non-image response.");
+    const fallbackBytes = new Uint8Array(await fallbackResponse.arrayBuffer());
+    if (fallbackBytes.length <= 1000) throw new Error("Image generation fallback returned an unexpectedly small image.");
+    const storedFallbackUrl = await storeImage(c.env, fallbackBytes, c.req.raw, brief.pageName);
+    if (!storedFallbackUrl) throw new Error("Generated fallback image could not be stored for Facebook publishing.");
+    return c.json({ imageUrl: storedFallbackUrl, prompt: finalPrompt, source: "external-fallback-r2" });
+  } catch (error) {
+    return c.json({ error: "Image generation failed", details: error instanceof Error ? error.message : String(error) }, 500);
+  }
 });
 
 apiRoutes.post("/autoposter/post-now", async (c) => {
@@ -227,7 +330,17 @@ apiRoutes.post("/autoposter/post-now", async (c) => {
     return c.json({ ...result, postedAs: withImage ? "photo" : "feed", page: config.name, historyId: id });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await persistHistory(c.env, { id, pageName: config.name, pageId: config.id, contentType: withImage ? "image" : "text", caption, ...(imageUrl ? { imageUrl } : {}), status: "failed", createdAt: new Date().toISOString(), error: sanitizeHistoryError(message) });
+    await persistHistory(c.env, {
+      id,
+      pageName: config.name,
+      pageId: config.id,
+      contentType: withImage ? "image" : "text",
+      caption,
+      ...(imageUrl ? { imageUrl } : {}),
+      status: "failed",
+      createdAt: new Date().toISOString(),
+      error: sanitizeHistoryError(message),
+    });
     return c.json({ error: "Facebook post failed", details: message, historyId: id }, 500);
   }
 });
