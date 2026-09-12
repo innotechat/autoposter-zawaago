@@ -50,7 +50,7 @@ function brandFromKey(key: string): "Zawaago" | "InnoTech" | null {
   return null;
 }
 
-function sanitizeError(value: unknown): string {
+export function sanitizeHistoryError(value: unknown): string {
   const text = value instanceof Error ? value.message : String(value || "Unknown error");
   return text.replace(/access[_ -]?token[^\s,;]*/gi, "access token [redacted]").slice(0, 500);
 }
