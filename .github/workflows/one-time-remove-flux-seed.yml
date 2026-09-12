@@ -1,0 +1,38 @@
+name: One-time Flux seed fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Remove unsupported Flux seed parameter
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("workers/api.ts")
+          text = p.read_text()
+          old = '          steps: 8,\n          seed: Math.floor(Math.random() * 2147483647),\n'
+          new = '          steps: 8,\n'
+          if old not in text:
+              raise SystemExit("Expected Flux seed block was not found; refusing to modify the file")
+          p.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Commit fix and remove temporary workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add workers/api.ts .github/workflows/one-time-remove-flux-seed.yml
+          git commit -m "fix: remove unsupported Flux seed parameter"
+          git push
