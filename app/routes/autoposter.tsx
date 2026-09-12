@@ -70,65 +70,48 @@ export default function Autoposter() {
   const canPublish = caption.trim().length > 0 && !busy;
   const progress = busy === "generate" ? ["Understanding brief", "Writing caption", "Building visual direction"] : busy === "image" ? ["Preparing creative brief", "Generating high-quality visual", "Preparing preview"] : [];
   const characterCount = caption.length;
-
   const briefPayload = useMemo(() => ({ pageName: page, topic, contentType, tone, language, audience, visualStyle, aspectRatio, branding, logoPosition, cta, customPrompt }), [page, topic, contentType, tone, language, audience, visualStyle, aspectRatio, branding, logoPosition, cta, customPrompt]);
 
   async function generate() {
     if (!topic.trim()) return setStatus({ type: "error", text: "Add a core idea first so the AI knows what to create." });
-    setBusy("generate");
-    setStatus({ type: "info", text: "Building your content brief and brand-aware prompt…" });
+    setBusy("generate"); setStatus({ type: "info", text: "Building your content brief and brand-aware prompt…" });
     try {
       const res = await fetch("/api/autoposter/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(briefPayload) });
       const data: any = await res.json();
       if (!res.ok) throw new Error(data.details || data.error || "Generation failed");
-      setCaption(data.caption || "");
-      setImageUrl("");
-      setImagePrompt(data.imagePrompt || "");
-      setActiveTab("caption");
+      setCaption(data.caption || ""); setImageUrl(""); setImagePrompt(data.imagePrompt || ""); setActiveTab("caption");
       setStatus({ type: "success", text: "Draft ready. Caption and visual direction are editable before publishing." });
-    } catch (error) { setStatus({ type: "error", text: friendlyError(error) }); }
-    finally { setBusy(null); }
+    } catch (error) { setStatus({ type: "error", text: friendlyError(error) }); } finally { setBusy(null); }
   }
 
   async function generateImage() {
     if (!topic.trim()) return setStatus({ type: "error", text: "Add a core idea before generating an image." });
-    setBusy("image");
-    setStatus({ type: "info", text: "Generating a high-quality visual from your full creative brief…" });
+    setBusy("image"); setStatus({ type: "info", text: "Generating a high-quality visual from your full creative brief…" });
     try {
       const res = await fetch("/api/autoposter/generate-image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...briefPayload, imgPrompt: imagePrompt }) });
       const data: any = await res.json();
       if (!res.ok) throw new Error(data.details || data.error || "Image generation failed");
-      setImageUrl(data.imageUrl || "");
-      setImagePrompt(data.prompt || imagePrompt);
-      setActiveTab("image");
+      setImageUrl(data.imageUrl || ""); setImagePrompt(data.prompt || imagePrompt); setActiveTab("image");
       setStatus({ type: "success", text: `Visual ready · ${data.source === "cloudflare-flux-r2" ? "Cloudflare AI + R2" : "high-resolution fallback"}.` });
-    } catch (error) { setStatus({ type: "error", text: friendlyError(error) }); }
-    finally { setBusy(null); }
+    } catch (error) { setStatus({ type: "error", text: friendlyError(error) }); } finally { setBusy(null); }
   }
 
   async function postNow(withImage = false) {
     if (!caption.trim()) return setStatus({ type: "error", text: "Write or generate a caption before publishing." });
     if (withImage && !imageUrl) return setStatus({ type: "error", text: "Generate a visual before publishing an image post." });
-    setBusy(withImage ? "photo" : "text");
-    setStatus({ type: "info", text: withImage ? `Publishing image to ${selectedPage.name}…` : `Publishing text to ${selectedPage.name}…` });
+    setBusy(withImage ? "photo" : "text"); setStatus({ type: "info", text: withImage ? `Publishing image to ${selectedPage.name}…` : `Publishing text to ${selectedPage.name}…` });
     try {
       const res = await fetch("/api/autoposter/post-now", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page, caption, imageUrl, withImage }) });
       const data: any = await res.json();
       if (!res.ok || data.error) throw new Error(data.details || data.error || "Facebook post failed");
       setStatus({ type: "success", text: `Published successfully to ${selectedPage.name}. Post ID: ${data.id || "accepted"}` });
-    } catch (error) { setStatus({ type: "error", text: friendlyError(error) }); }
-    finally { setBusy(null); }
+    } catch (error) { setStatus({ type: "error", text: friendlyError(error) }); } finally { setBusy(null); }
   }
 
   async function checkHealth() {
     setBusy("health");
-    try {
-      const res = await fetch("/api/autoposter/health");
-      const data: any = await res.json();
-      if (!res.ok) throw new Error(data.error || "Health check failed");
-      setHealth(data); setShowHealth(true); setStatus({ type: "success", text: "System check completed." });
-    } catch (error) { setStatus({ type: "error", text: friendlyError(error) }); }
-    finally { setBusy(null); }
+    try { const res = await fetch("/api/autoposter/health"); const data: any = await res.json(); if (!res.ok) throw new Error(data.error || "Health check failed"); setHealth(data); setShowHealth(true); setStatus({ type: "success", text: "System check completed." }); }
+    catch (error) { setStatus({ type: "error", text: friendlyError(error) }); } finally { setBusy(null); }
   }
 
   async function copyCaption() {
@@ -145,26 +128,23 @@ export default function Autoposter() {
       <div className="mx-auto w-full max-w-[1380px] px-4 py-4 sm:px-6 lg:px-8 lg:py-6">
         <header className="studio-header">
           <div className="flex min-w-0 items-center gap-3"><div className="brand-mark">Z</div><div className="min-w-0"><div className="flex items-center gap-2"><h1 className="truncate text-[18px] font-semibold tracking-[-0.03em] sm:text-[20px]">Zawaago Autoposter</h1><span className="status-pill"><span className="live-dot" /> Live</span></div><p className="mt-0.5 hidden text-[12px] text-[#777] sm:block">AI Social Content Studio · create, refine, publish</p></div></div>
-          <div className="flex items-center gap-2"><button className="icon-button" title="System health" onClick={checkHealth} disabled={!!busy}>{busy === "health" ? <SpinnerGap className="animate-spin" size={19} /> : <Pulse size={19} />}<span className="hidden sm:inline">Health</span></button><button className="icon-button" title="Studio settings" onClick={() => setShowSettings(true)} disabled={!!busy}><GearSix size={19} /><span className="hidden sm:inline">Settings</span></button></div>
+          <div className="flex items-center gap-2"><a className="icon-button" href="/history" title="Publishing history"><ClockCounterClockwise size={19} /><span className="hidden sm:inline">History</span></a><button className="icon-button" title="System health" onClick={checkHealth} disabled={!!busy}>{busy === "health" ? <SpinnerGap className="animate-spin" size={19} /> : <Pulse size={19} />}<span className="hidden sm:inline">Health</span></button><button className="icon-button" title="Studio settings" onClick={() => setShowSettings(true)} disabled={!!busy}><GearSix size={19} /><span className="hidden sm:inline">Settings</span></button></div>
         </header>
 
         <section className="hero-strip"><div><div className="eyebrow"><Sparkle size={14} weight="fill" /> CONTENT STUDIO</div><h2>Create something worth stopping for.</h2><p>Turn one idea into a brand-aware caption and visual, then review the finished post before it reaches Facebook.</p></div><div className="hero-stat hidden md:flex"><span>2</span><small>brands<br />connected</small></div></section>
 
         <div className="workspace-grid">
-          <section className="panel composer-panel">
-            <div className="panel-heading"><div><span className="section-number">01</span><h3>Build the brief</h3></div><span className="muted-label">AI-assisted</span></div>
+          <section className="panel composer-panel"><div className="panel-heading"><div><span className="section-number">01</span><h3>Build the brief</h3></div><span className="muted-label">AI-assisted</span></div>
             <div className="field-group"><label>Publish as</label><div className="page-switcher">{pages.map((item) => <button key={item.id} type="button" onClick={() => setPage(item.id)} className={`page-option ${page === item.id ? "selected" : ""}`}><span className={`page-avatar ${item.id === "InnoTech" ? "alt" : ""}`}>{item.mark}</span><span className="page-copy"><strong>{item.name}</strong><small>{item.handle}</small></span>{page === item.id && <CheckCircle className="ml-auto" size={19} weight="fill" />}</button>)}</div></div>
             <div className="field-grid"><div className="field-group"><label>Content direction</label><select value={contentType} onChange={(e) => setContentType(e.target.value)}>{contentTypes.map((item) => <option key={item}>{item}</option>)}</select></div><div className="field-group"><label>Voice & tone</label><select value={tone} onChange={(e) => setTone(e.target.value)}>{tones.map((item) => <option key={item}>{item}</option>)}</select></div></div>
             <div className="field-grid"><div className="field-group"><label>Language</label><select value={language} onChange={(e) => setLanguage(e.target.value)}>{languages.map((item) => <option key={item}>{item}</option>)}</select></div><div className="field-group"><label>Target audience</label><select value={audience} onChange={(e) => setAudience(e.target.value)}>{audiences.map((item) => <option key={item}>{item}</option>)}</select></div></div>
             <div className="field-group"><div className="flex items-center justify-between"><label>Core idea</label><span className="field-hint">What should people remember?</span></div><textarea value={topic} onChange={(e) => setTopic(e.target.value)} rows={5} placeholder="Describe the idea, problem, launch, insight or story…" /></div>
             <button type="button" onClick={() => setShowAdvanced((v) => !v)} className="w-full rounded-xl border border-black/10 bg-white px-4 py-3 text-left text-sm font-semibold transition hover:bg-black/[0.025]"><span className="flex items-center justify-between"><span>Advanced creative controls</span><span className="text-xs text-black/45">{showAdvanced ? "Hide" : "Optional"}</span></span></button>
             {showAdvanced && <div className="mt-3 space-y-3 rounded-2xl border border-black/8 bg-[#faf9f7] p-3"><div className="field-grid"><div className="field-group"><label>Visual style</label><select value={visualStyle} onChange={(e) => setVisualStyle(e.target.value)}>{visualStyles.map((item) => <option key={item}>{item}</option>)}</select></div><div className="field-group"><label>Aspect ratio</label><select value={aspectRatio} onChange={(e) => setAspectRatio(e.target.value)}>{ratios.map((item) => <option key={item}>{item}</option>)}</select></div></div><div className="field-grid"><div className="field-group"><label>Branding</label><select value={branding} onChange={(e) => setBranding(e.target.value)}>{brandingModes.map((item) => <option key={item}>{item}</option>)}</select></div><div className="field-group"><label>Logo position</label><select value={logoPosition} onChange={(e) => setLogoPosition(e.target.value)}>{logoPositions.map((item) => <option key={item}>{item}</option>)}</select></div></div><div className="field-group"><label>CTA</label><select value={cta} onChange={(e) => setCta(e.target.value)}>{ctas.map((item) => <option key={item}>{item}</option>)}</select></div><div className="field-group"><label>Additional creative direction</label><textarea value={customPrompt} onChange={(e) => setCustomPrompt(e.target.value)} rows={3} placeholder="Optional: people, setting, mood, campaign angle, visual references…" /></div></div>}
-            <button type="button" onClick={generate} disabled={!!busy} className="primary-action">{busy === "generate" ? <><SpinnerGap className="animate-spin" size={19} /> Creating draft…</> : <><MagicWand size={19} weight="fill" /> Generate content</>}</button>
-            {progress.length > 0 && <div className="progress-list">{progress.map((item, index) => <div key={item}><span>{index + 1}</span>{item}</div>)}</div>}
+            <button type="button" onClick={generate} disabled={!!busy} className="primary-action">{busy === "generate" ? <><SpinnerGap className="animate-spin" size={19} /> Creating draft…</> : <><MagicWand size={19} weight="fill" /> Generate content</>}</button>{progress.length > 0 && <div className="progress-list">{progress.map((item, index) => <div key={item}><span>{index + 1}</span>{item}</div>)}</div>}
           </section>
 
-          <section className="panel preview-panel">
-            <div className="panel-heading"><div><span className="section-number">02</span><h3>Review & refine</h3></div><div className="flex items-center gap-2"><button className="icon-button small" onClick={clearDraft} title="Clear draft"><Trash size={17} /></button></div></div>
+          <section className="panel preview-panel"><div className="panel-heading"><div><span className="section-number">02</span><h3>Review & refine</h3></div><div className="flex items-center gap-2"><button className="icon-button small" onClick={clearDraft} title="Clear draft"><Trash size={17} /></button></div></div>
             <div className="preview-tabs"><button className={activeTab === "caption" ? "active" : ""} onClick={() => setActiveTab("caption")}>Caption</button><button className={activeTab === "image" ? "active" : ""} onClick={() => setActiveTab("image")}>Visual</button></div>
             {activeTab === "caption" ? <div className="editor-card"><div className="editor-toolbar"><span><PencilSimple size={15} /> Editable draft</span><button onClick={copyCaption} disabled={!caption}>{copied ? <CheckCircle size={16} weight="fill" /> : <Copy size={16} />} {copied ? "Copied" : "Copy"}</button></div><textarea className="caption-editor" value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="Your AI-generated caption will appear here…" /><div className="editor-footer"><span>{characterCount} characters</span><span>Facebook-ready</span></div></div> : <div className="visual-card">{imageUrl ? <img src={imageUrl} alt="Generated social creative" /> : <div className="empty-visual"><ImageSquare size={42} /><strong>Your visual will appear here</strong><span>Generate content first, then create the visual.</span></div>}<div className="visual-actions"><button className="secondary-action" onClick={generateImage} disabled={!!busy || !topic.trim()}>{busy === "image" ? <><SpinnerGap className="animate-spin" size={18} /> Generating…</> : <><ArrowClockwise size={18} /> {imageUrl ? "Regenerate visual" : "Generate visual"}</>}</button></div></div>}
             {status.text && <div className={`status-banner ${status.type}`}><span>{statusIcon}</span><span>{status.text}</span></div>}
