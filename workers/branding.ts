@@ -36,7 +36,7 @@ brandingRoutes.post("/autoposter/assets/brand", async (c) => {
     if (file.size < 1000) return c.json({ error: "Branded image is unexpectedly small" }, 400);
     if (file.size > 12 * 1024 * 1024) return c.json({ error: "Branded image exceeds the 12 MB limit" }, 413);
 
-    const key = `branded/${brand}/${Date.now()}-${crypto.randomUUID()}.${extensionFor(contentType)}`;
+    const key = `generated/${brand}/branded/${Date.now()}-${crypto.randomUUID()}.${extensionFor(contentType)}`;
     await c.env.ASSETS.put(key, await file.arrayBuffer(), {
       httpMetadata: {
         contentType,
