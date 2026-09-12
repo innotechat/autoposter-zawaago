@@ -81,7 +81,8 @@ function buildImagePrompt(brief: Brief): string {
     `Branding treatment: ${branding}; logo position ${position}. Do not invent or render fake logos, brand names, URLs or statistics inside the artwork.`,
     `CTA context: ${cta}.`,
     `Use realistic lighting, crisp details, clean geometry, premium commercial art direction, high visual quality.`,
-    `Avoid clutter, generic stock-photo look, distorted hands/faces, excessive text, watermarks, fake UI, illegible typography and visual noise.`,
+    `Create clean original artwork with no generator watermark, no platform watermark, no signature, no fake logo, no fake UI and no illegible text.`,
+    `Avoid clutter, generic stock-photo look, distorted hands/faces, excessive text and visual noise.`,
     brief.customPrompt ? `Additional creative direction: ${brief.customPrompt}.` : "",
   ].filter(Boolean).join(" ");
 }
@@ -130,10 +131,30 @@ async function postToFacebook(caption: string, pageId: string, pageToken: string
   return { id: data.id, pageId, endpoint: `/${pageId}/feed` };
 }
 
-async function validatePublicImageUrl(imageUrl: string) {
+async function validatePublicImageUrl(imageUrl: string, env: Env, request: Request) {
   if (!/^https?:\/\//i.test(imageUrl)) throw new Error("Image URL must be a public HTTP(S) URL before Facebook publishing.");
   if (imageUrl.startsWith("data:")) throw new Error("The image is not publicly hosted yet. Configure the image storage binding before publishing it to Facebook.");
-  const response = await fetch(imageUrl, { method: "HEAD", redirect: "follow" });
+
+  const url = new URL(imageUrl);
+  const requestOrigin = new URL(request.url).origin;
+  const assetPrefix = "/api/autoposter/assets/";
+
+  // Generated assets live in our R2 bucket. Validate them directly when the
+  // URL points back to this Worker, avoiding fragile external HEAD requests.
+  if (env.ASSETS && url.origin === requestOrigin && url.pathname.startsWith(assetPrefix)) {
+    const encodedKey = url.pathname.slice(assetPrefix.length);
+    const key = decodeURIComponent(encodedKey);
+    const object = await env.ASSETS.get(key);
+    if (!object) throw new Error("The selected image asset is no longer available in R2. Generate the visual again.");
+    const contentType = object.httpMetadata?.contentType || "";
+    if (!contentType.toLowerCase().startsWith("image/")) throw new Error("The selected asset is not an image. Generate a valid image before publishing.");
+    if (object.size <= 1000) throw new Error("The selected image asset is unexpectedly small. Regenerate the image before publishing.");
+    return;
+  }
+
+  // External URLs are accepted only when they are genuinely public and
+  // verifiable. The image generator itself never returns such URLs anymore.
+  const response = await fetch(url.toString(), { method: "HEAD", redirect: "follow" });
   if (!response.ok) throw new Error(`Image could not be verified for Facebook (${response.status}). Regenerate the image and try again.`);
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.toLowerCase().startsWith("image/")) throw new Error("The selected asset is not an image. Generate a valid image before publishing.");
@@ -141,10 +162,10 @@ async function validatePublicImageUrl(imageUrl: string) {
   if (length > 0 && length < 1000) throw new Error("The selected image asset is unexpectedly small. Regenerate the image before publishing.");
 }
 
-async function postImageToFacebook(caption: string, imageUrl: string, pageId: string, pageToken: string) {
+async function postImageToFacebook(caption: string, imageUrl: string, pageId: string, pageToken: string, env: Env, request: Request) {
   if (!caption?.trim()) throw new Error("Caption is empty");
   if (!imageUrl?.trim()) throw new Error("Image URL is empty");
-  await validatePublicImageUrl(imageUrl.trim());
+  await validatePublicImageUrl(imageUrl.trim(), env, request);
   const response = await fetch(`${GRAPH_BASE}/${encodeURIComponent(pageId)}/photos`, {
     method: "POST",
     body: new URLSearchParams({ caption: caption.trim(), url: imageUrl.trim(), access_token: pageToken }),
@@ -165,12 +186,12 @@ function imageBytesFromResult(result: any): Uint8Array | null {
 }
 
 async function storeImage(env: Env, bytes: Uint8Array, request: Request, pageName: string) {
-  if (!env.ASSETS) return null;
+  if (!env.ASSETS) throw new Error("Cloudflare R2 image storage is not configured.");
   const safeBrand = pageName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   const key = `generated/${safeBrand}/${Date.now()}-${crypto.randomUUID()}.jpg`;
   await env.ASSETS.put(key, bytes, {
     httpMetadata: { contentType: "image/jpeg", cacheControl: "public, max-age=31536000, immutable" },
-    customMetadata: { brand: safeBrand, source: "autoposter-generated" },
+    customMetadata: { brand: safeBrand, source: "cloudflare-flux", watermark: "none" },
   });
   return `${new URL(request.url).origin}/api/autoposter/assets/${encodeURIComponent(key)}`;
 }
@@ -253,11 +274,12 @@ apiRoutes.post("/autoposter/generate-image", async (c) => {
     };
     normalizePage(brief.pageName);
     const finalPrompt = buildImagePrompt(brief);
-
-    // Prefer Cloudflare Flux. A short retry makes transient AI failures less likely to
-    // push a normal generation request onto the external fallback path.
     let lastImageError = "";
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+
+    // Production policy: Cloudflare Flux is the only image generator. Do not
+    // fall back to third-party image URLs because they can contain watermarks,
+    // expire, or fail Facebook verification.
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
         const result: any = await c.env.AI.run("@cf/black-forest-labs/flux-1-schnell" as any, {
           prompt: finalPrompt,
@@ -265,39 +287,22 @@ apiRoutes.post("/autoposter/generate-image", async (c) => {
           seed: Math.floor(Math.random() * 2147483647),
         });
         const bytes = imageBytesFromResult(result);
-        if (bytes && bytes.length > 1000) {
-          const storedUrl = await storeImage(c.env, bytes, c.req.raw, brief.pageName);
-          if (storedUrl) return c.json({ imageUrl: storedUrl, prompt: finalPrompt, source: "cloudflare-flux-r2" });
-          const binary = String.fromCharCode(...bytes);
-          return c.json({ imageUrl: `data:image/jpeg;base64,${btoa(binary)}`, prompt: finalPrompt, source: "cloudflare-flux" });
+        if (!bytes || bytes.length <= 1000) {
+          lastImageError = "Cloudflare Flux returned no usable image.";
+          continue;
         }
-        lastImageError = "Cloudflare image model returned no usable image bytes.";
+        const imageUrl = await storeImage(c.env, bytes, c.req.raw, brief.pageName);
+        return c.json({ imageUrl, prompt: finalPrompt, source: "cloudflare-flux-r2", quality: "production", watermark: "none" });
       } catch (error) {
         lastImageError = error instanceof Error ? error.message : String(error);
-        console.warn(`Cloudflare image generation attempt ${attempt + 1} failed`, error);
+        console.warn(`Cloudflare Flux image attempt ${attempt} failed`, error);
       }
     }
 
-    // Fallback images are fetched into our R2 bucket before being returned. This is
-    // critical because Facebook cannot reliably consume a transient generator URL.
-    // The UI therefore never receives a publishable external generator URL when R2 is configured.
-    if (!c.env.ASSETS) {
-      throw new Error(lastImageError || "Cloudflare image generation failed and image storage is not configured for fallback assets.");
-    }
-
-    const lowerRatio = brief.aspectRatio.toLowerCase();
-    const width = lowerRatio.includes("landscape") ? 1536 : 1024;
-    const height = lowerRatio.includes("portrait") ? 1536 : 1024;
-    const fallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(finalPrompt)}?width=${width}&height=${height}&nologo=true&seed=${Math.floor(Math.random() * 1000000)}`;
-    const fallbackResponse = await fetch(fallbackUrl, { method: "GET", redirect: "follow" });
-    if (!fallbackResponse.ok) throw new Error(`Image generation fallback failed (${fallbackResponse.status}).`);
-    const fallbackType = (fallbackResponse.headers.get("content-type") || "").toLowerCase();
-    if (!fallbackType.startsWith("image/")) throw new Error("Image generation fallback returned a non-image response.");
-    const fallbackBytes = new Uint8Array(await fallbackResponse.arrayBuffer());
-    if (fallbackBytes.length <= 1000) throw new Error("Image generation fallback returned an unexpectedly small image.");
-    const storedFallbackUrl = await storeImage(c.env, fallbackBytes, c.req.raw, brief.pageName);
-    if (!storedFallbackUrl) throw new Error("Generated fallback image could not be stored for Facebook publishing.");
-    return c.json({ imageUrl: storedFallbackUrl, prompt: finalPrompt, source: "external-fallback-r2" });
+    return c.json({
+      error: "Image generation failed",
+      details: lastImageError || "Cloudflare Flux could not generate a usable image after 3 attempts.",
+    }, 503);
   } catch (error) {
     return c.json({ error: "Image generation failed", details: error instanceof Error ? error.message : String(error) }, 500);
   }
@@ -313,7 +318,7 @@ apiRoutes.post("/autoposter/post-now", async (c) => {
   const id = crypto.randomUUID();
   try {
     const result = withImage
-      ? await postImageToFacebook(caption, imageUrl, config.id, getPageToken(page, c.env))
+      ? await postImageToFacebook(caption, imageUrl, config.id, getPageToken(page, c.env), c.env, c.req.raw)
       : await postToFacebook(caption, config.id, getPageToken(page, c.env));
     const record = {
       id,
