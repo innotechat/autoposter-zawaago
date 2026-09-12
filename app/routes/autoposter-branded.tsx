@@ -7,6 +7,8 @@ const LOGOS: Record<BrandName, string> = {
   InnoTech: "/brand/innotech-logo-final.svg",
 };
 
+type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
 function loadImage(blob: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob);
@@ -22,7 +24,7 @@ async function applyBranding(
   pageName: BrandName,
   branding: string,
   logoPosition: string,
-  originalFetch: typeof window.fetch,
+  originalFetch: FetchLike,
 ) {
   if (branding === "No branding") return imageUrl;
 
@@ -80,20 +82,20 @@ async function applyBranding(
 
 export default function BrandedAutoposter() {
   useEffect(() => {
-    const originalFetch = window.fetch.bind(window);
-    const wrappedFetch: typeof window.fetch = async (input, init) => {
+    const originalFetch = window.fetch.bind(window) as FetchLike;
+    const wrappedFetch: FetchLike = async (input, init) => {
       const response = await originalFetch(input, init);
       const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
       if (!url.endsWith("/api/autoposter/generate-image") || !response.ok) return response;
 
       try {
         const requestBody = typeof init?.body === "string" ? JSON.parse(init.body) : null;
-        const pageName = requestBody?.pageName === "InnoTech" ? "InnoTech" : "Zawaago";
+        const pageName: BrandName = requestBody?.pageName === "InnoTech" ? "InnoTech" : "Zawaago";
         const branding = String(requestBody?.branding || "Subtle watermark");
         const logoPosition = String(requestBody?.logoPosition || "Bottom Right");
         if (branding === "No branding") return response;
 
-        const data = await response.clone().json();
+        const data: any = await response.clone().json();
         if (!data?.imageUrl) return response;
         const brandedUrl = await applyBranding(data.imageUrl, pageName, branding, logoPosition, originalFetch);
         const next = { ...data, imageUrl: brandedUrl, source: `${data.source || "generated"}+real-logo-overlay` };
