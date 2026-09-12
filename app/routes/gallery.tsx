@@ -10,6 +10,17 @@ interface Asset {
   source: string;
 }
 
+interface GalleryResponse {
+  ok: boolean;
+  assets?: Asset[];
+  error?: string;
+}
+
+interface GalleryDeleteResponse {
+  ok: boolean;
+  error?: string;
+}
+
 export default function Gallery() {
   const [brand, setBrand] = useState<"All" | "Zawaago" | "InnoTech">("All");
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -22,7 +33,7 @@ export default function Gallery() {
     try {
       const query = selected === "All" ? "" : `?brand=${encodeURIComponent(selected)}`;
       const response = await fetch(`/api/gallery/assets${query}`);
-      const data = await response.json();
+      const data = (await response.json()) as GalleryResponse;
       if (!response.ok || !data.ok) throw new Error(data.error || "Unable to load gallery.");
       setAssets(data.assets || []);
     } catch (err) { setError(err instanceof Error ? err.message : "Unable to load gallery."); }
@@ -41,7 +52,7 @@ export default function Gallery() {
     setDeleting(asset.key); setError("");
     try {
       const response = await fetch(`/api/gallery/assets/${encodeURIComponent(asset.key)}`, { method: "DELETE" });
-      const data = await response.json();
+      const data = (await response.json()) as GalleryDeleteResponse;
       if (!response.ok || !data.ok) throw new Error(data.error || "Unable to delete asset.");
       setAssets((current) => current.filter((item) => item.key !== asset.key));
     } catch (err) { setError(err instanceof Error ? err.message : "Unable to delete asset."); }
