@@ -4,6 +4,7 @@ import {
   CheckCircle,
   ClipboardText,
   ClockCounterClockwise,
+  CalendarCheck,
   CloudArrowUp,
   Copy,
   FacebookLogo,
@@ -98,6 +99,12 @@ export default function Autoposter() {
   const [activeTab, setActiveTab] = useState<"caption" | "image">("caption");
   const [showAdvanced, setShowAdvanced] = useState(false);
 
+  function openScheduler() {
+    if (!caption.trim()) return setStatus({ type: "error", text: "Generate or write a caption before scheduling." });
+    localStorage.setItem("autoposter:schedule-draft", JSON.stringify({ page, caption, imageUrl }));
+    window.location.href = "/schedule";
+  }
+
   const selectedPage = pages.find((item) => item.id === page) ?? pages[0];
   const canPublish = caption.trim().length > 0 && !busy;
   const progress = busy === "generate" ? ["Understanding brief", "Writing caption", "Building visual direction"] : busy === "image" ? ["Preparing creative brief", "Generating high-quality visual", "Preparing preview"] : busy === "series" ? ["Planning the learning journey", "Writing connected lessons", "Creating visual directions"] : [];
@@ -166,7 +173,7 @@ export default function Autoposter() {
 
   return (
     <main className="autoposter-shell min-h-screen text-[#171717]"><div className="mx-auto w-full max-w-[1380px] px-4 py-4 sm:px-6 lg:px-8 lg:py-6">
-      <header className="studio-header"><div className="flex min-w-0 items-center gap-3"><div className="brand-mark">Z</div><div className="min-w-0"><div className="flex items-center gap-2"><h1 className="truncate text-[18px] font-semibold tracking-[-0.03em] sm:text-[20px]">Zawaago Autoposter</h1><span className="status-pill"><span className="live-dot" /> Live</span></div><p className="mt-0.5 hidden text-[12px] text-[#777] sm:block">AI Social Content Studio · create, refine, publish</p></div></div><div className="flex items-center gap-2"><a className="icon-button" href="/history" title="Publishing history"><ClockCounterClockwise size={19} /><span className="hidden sm:inline">History</span></a><button className="icon-button" title="System health" onClick={checkHealth} disabled={!!busy}>{busy === "health" ? <SpinnerGap className="animate-spin" size={19} /> : <Pulse size={19} />}<span className="hidden sm:inline">Health</span></button><button className="icon-button" title="Studio settings" onClick={() => setShowSettings(true)} disabled={!!busy}><GearSix size={19} /><span className="hidden sm:inline">Settings</span></button></div></header>
+      <header className="studio-header"><div className="flex min-w-0 items-center gap-3"><div className="brand-mark">Z</div><div className="min-w-0"><div className="flex items-center gap-2"><h1 className="truncate text-[18px] font-semibold tracking-[-0.03em] sm:text-[20px]">Zawaago Autoposter</h1><span className="status-pill"><span className="live-dot" /> Live</span></div><p className="mt-0.5 hidden text-[12px] text-[#777] sm:block">AI Social Content Studio · create, refine, publish</p></div></div><div className="flex items-center gap-2"><a className="icon-button" href="/history" title="Publishing history"><ClockCounterClockwise size={19} /><span className="hidden sm:inline">History</span></a><button className="icon-button" title="Schedule post" onClick={openScheduler} disabled={!!busy}><CalendarCheck size={19} /><span className="hidden sm:inline">Schedule</span></button><button className="icon-button" title="System health" onClick={checkHealth} disabled={!!busy}>{busy === "health" ? <SpinnerGap className="animate-spin" size={19} /> : <Pulse size={19} />}<span className="hidden sm:inline">Health</span></button><button className="icon-button" title="Studio settings" onClick={() => setShowSettings(true)} disabled={!!busy}><GearSix size={19} /><span className="hidden sm:inline">Settings</span></button></div></header>
       <section className="hero-strip"><div><div className="eyebrow"><Sparkle size={14} weight="fill" /> CONTENT STUDIO</div><h2>Create something worth stopping for.</h2><p>Turn one idea into a brand-aware caption and visual, or build a connected education series for spaced publishing.</p></div><div className="hero-stat hidden md:flex"><span>2</span><small>brands<br />connected</small></div></section>
       <div className="workspace-grid">
         <section className="panel composer-panel"><div className="panel-heading"><div><span className="section-number">01</span><h3>Build the brief</h3></div><span className="muted-label">AI-assisted</span></div>
