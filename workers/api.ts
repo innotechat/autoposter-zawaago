@@ -80,10 +80,10 @@ function buildImagePrompt(brief: Brief): string {
     `Visual style: ${style.slice(0, 180)}.`,
     `Brand character: ${brand.description}; ${brand.visual}.`,
     `Composition: ${ratio}; strong focal subject; balanced negative space; professional hierarchy; mobile-first readability.`,
-    `Branding: ${branding}; logo position ${position}. Never invent or render fake logos, brand names, URLs or statistics.`,
-    `CTA context: ${cta.slice(0, 120)}.`,
+    `Branding: ${branding}; logo position ${position}. The real ${brand.name} logo will be overlaid separately after generation; never render any logo, brand name, URL or statistics in the artwork.`,
+    `CTA context: ${cta.slice(0, 120)}. The CTA will be overlaid separately; do not render CTA text in the artwork.`,
     `Premium commercial art direction, realistic lighting, crisp details, clean geometry, high visual quality.`,
-    `Original artwork only: no generator watermark, platform watermark, signature, fake logo, fake UI or illegible text.`,
+    `Clean artwork only: render NO text, letters, words, numbers, captions, slogans, logos, watermarks, signatures, fake UI or typography anywhere in the image.`,
     `Avoid clutter, generic stock-photo look, distorted hands/faces, excessive text and visual noise.`,
     custom ? `Additional creative direction: ${custom}.` : "",
   ].filter(Boolean).join(" ");
