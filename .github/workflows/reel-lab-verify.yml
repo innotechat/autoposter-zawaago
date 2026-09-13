@@ -1,0 +1,30 @@
+name: Reel Lab Verify
+
+on:
+  push:
+    branches: [reel-lab-test]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: |
+          test -f workers/reel-lab.ts
+          test -f app/routes/reel-lab.tsx
+          test -f app/reel-lab.css
+          grep -q 'reelLabRoutes' workers/app.ts
+          grep -q '/reel-lab/storyboard' workers/reel-lab.ts
+          grep -q '/reel-lab/tts' workers/reel-lab.ts
+          grep -q '@cf/deepgram/aura-2-en' workers/reel-lab.ts
+          grep -q 'Portrait 9:16' app/routes/reel-lab.tsx
+          grep -q 'MediaRecorder' app/routes/reel-lab.tsx
+          grep -q 'reel-lab' app/routes.ts
+          ! grep -q 'post-now' app/routes/reel-lab.tsx
