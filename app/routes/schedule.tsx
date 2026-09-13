@@ -17,7 +17,7 @@ export default function SchedulePage() {
 
   async function load() {
     const res = await fetch("/api/autoposter/schedules");
-    const data = await res.json().catch(() => ({}));
+    const data: any = await res.json().catch(() => ({}));
     if (res.ok) setSchedules(data.schedules || []); else setMessage(errorText(data));
   }
 
@@ -41,7 +41,7 @@ export default function SchedulePage() {
     setBusy(true); setMessage("Scheduling…");
     try {
       const res = await fetch("/api/autoposter/schedules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page, caption, imageUrl, withImage, scheduledAt: new Date(scheduledAt).toISOString() }) });
-      const data = await res.json().catch(() => ({}));
+      const data: any = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(errorText(data));
       setCaption(""); setImageUrl(""); setWithImage(false); setScheduledAt(""); setMessage(`Scheduled for ${new Date(data.schedule.scheduledAt).toLocaleString()}.`); await load();
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } finally { setBusy(false); }
@@ -50,7 +50,7 @@ export default function SchedulePage() {
   async function cancel(id: string) {
     if (!confirm("Cancel this scheduled post?")) return;
     const res = await fetch(`/api/autoposter/schedules/${encodeURIComponent(id)}`, { method: "DELETE" });
-    const data = await res.json().catch(() => ({}));
+    const data: any = await res.json().catch(() => ({}));
     if (!res.ok) setMessage(errorText(data)); else { setMessage("Scheduled post cancelled."); await load(); }
   }
 
