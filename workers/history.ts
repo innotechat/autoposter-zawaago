@@ -10,7 +10,7 @@ type HistoryRecord = {
   id: string;
   pageName: "Zawaago" | "InnoTech";
   pageId: string;
-  contentType: "text" | "image";
+  contentType: "text" | "image" | "reel";
   caption: string;
   imageUrl?: string;
   imageKey?: string;
