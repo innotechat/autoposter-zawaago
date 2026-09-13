@@ -13,6 +13,7 @@ type HistoryRecord = {
   contentType: "text" | "image" | "reel";
   caption: string;
   imageUrl?: string;
+  videoUrl?: string;
   imageKey?: string;
   facebookPostId?: string;
   status: "published" | "failed";
