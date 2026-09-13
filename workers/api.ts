@@ -12,7 +12,7 @@ type Env = {
 
 export const apiRoutes = new Hono<{ Bindings: Env }>();
 
-const GRAPH_VERSION = "v20.0";
+const GRAPH_VERSION = "v25.0";
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
 type Brief = {
@@ -143,8 +143,6 @@ async function validatePublicImageUrl(imageUrl: string, env: Env, request: Reque
   const requestOrigin = new URL(request.url).origin;
   const assetPrefix = "/api/autoposter/assets/";
 
-  // Generated assets live in our R2 bucket. Validate them directly when the
-  // URL points back to this Worker, avoiding fragile external HEAD requests.
   if (env.ASSETS && url.origin === requestOrigin && url.pathname.startsWith(assetPrefix)) {
     const encodedKey = url.pathname.slice(assetPrefix.length);
     const key = decodeURIComponent(encodedKey);
@@ -156,8 +154,6 @@ async function validatePublicImageUrl(imageUrl: string, env: Env, request: Reque
     return;
   }
 
-  // External URLs are accepted only when they are genuinely public and
-  // verifiable. The image generator itself never returns such URLs anymore.
   const response = await fetch(url.toString(), { method: "HEAD", redirect: "follow" });
   if (!response.ok) throw new Error(`Image could not be verified for Facebook (${response.status}). Regenerate the image and try again.`);
   const contentType = response.headers.get("content-type") || "";
@@ -280,9 +276,6 @@ apiRoutes.post("/autoposter/generate-image", async (c) => {
     const finalPrompt = buildImagePrompt(brief);
     let lastImageError = "";
 
-    // Production policy: Cloudflare Flux is the only image generator. Do not
-    // fall back to third-party image URLs because they can contain watermarks,
-    // expire, or fail Facebook verification.
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
         const result: any = await c.env.AI.run("@cf/black-forest-labs/flux-1-schnell" as any, {
