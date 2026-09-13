@@ -36,12 +36,16 @@ function graphError(data: any, fallback: string) {
   return data?.error?.message || fallback;
 }
 
-async function verifyR2Video(env: Env, videoUrl: string, request: Request) {
+async function verifyR2Video(env: Env, videoUrl: string, request?: Request) {
   if (!env.ASSETS) throw new Error("Asset storage is not configured.");
   const url = new URL(videoUrl);
-  const origin = new URL(request.url).origin;
+  if (request) {
+    const origin = new URL(request.url).origin;
+    const prefix = "/api/autoposter/assets/";
+    if (url.origin !== origin || !url.pathname.startsWith(prefix)) throw new Error("Reel must be a video stored in this Autoposter R2 bucket.");
+  }
   const prefix = "/api/autoposter/assets/";
-  if (url.origin !== origin || !url.pathname.startsWith(prefix)) throw new Error("Reel must be a video stored in this Autoposter R2 bucket.");
+  if (!url.pathname.startsWith(prefix)) throw new Error("Invalid Reel asset URL.");
   const objectKey = decodeURIComponent(url.pathname.slice(prefix.length));
   if (!objectKey.startsWith("generated/") || objectKey.includes("..")) throw new Error("Invalid Reel asset path.");
   const object = await env.ASSETS.get(objectKey);
@@ -59,6 +63,40 @@ async function graphJson(url: string, init: RequestInit) {
   return data;
 }
 
+export async function publishFacebookReel(env: Env, pageName: BrandName, videoUrl: string, caption: string, title = "") {
+  const { pageId, token } = pageConfig(pageName, env);
+  const start = await graphJson(`${GRAPH_BASE}/${encodeURIComponent(pageId)}/video_reels`, {
+    method: "POST",
+    body: new URLSearchParams({ upload_phase: "start", access_token: token }),
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+  });
+  const videoId = String(start?.video_id || "");
+  const uploadUrl = String(start?.upload_url || "");
+  if (!videoId || !uploadUrl) throw new Error("Facebook did not return a Reel upload session.");
+
+  const uploadResponse = await fetch(uploadUrl, {
+    method: "POST",
+    headers: { Authorization: `OAuth ${token}`, file_url: videoUrl },
+  });
+  const uploadData: any = await uploadResponse.json().catch(() => ({}));
+  if (!uploadResponse.ok || uploadData?.error || uploadData?.success === false) throw new Error(graphError(uploadData, `Facebook Reel upload failed (${uploadResponse.status}).`));
+
+  const finishParams: Record<string, string> = {
+    video_id: videoId,
+    upload_phase: "finish",
+    video_state: "PUBLISHED",
+    description: caption,
+    access_token: token,
+  };
+  if (title) finishParams.title = title.slice(0, 100);
+  const finish = await graphJson(`${GRAPH_BASE}/${encodeURIComponent(pageId)}/video_reels`, {
+    method: "POST",
+    body: new URLSearchParams(finishParams),
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+  });
+  return { pageName, pageId, videoId, published: finish?.success !== false, graphVersion: GRAPH_VERSION };
+}
+
 reelRoutes.post("/autoposter/reels/publish", async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
@@ -69,39 +107,8 @@ reelRoutes.post("/autoposter/reels/publish", async (c) => {
     if (!caption) return c.json({ error: "Reel caption is required." }, 400);
     if (!videoUrl) return c.json({ error: "Reel video URL is required." }, 400);
     await verifyR2Video(c.env, videoUrl, c.req.raw);
-    const { pageId, token } = pageConfig(pageName, c.env);
-
-    const start = await graphJson(`${GRAPH_BASE}/${encodeURIComponent(pageId)}/video_reels`, {
-      method: "POST",
-      body: new URLSearchParams({ upload_phase: "start", access_token: token }),
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-    });
-    const videoId = String(start?.video_id || "");
-    const uploadUrl = String(start?.upload_url || "");
-    if (!videoId || !uploadUrl) throw new Error("Facebook did not return a Reel upload session.");
-
-    const uploadResponse = await fetch(uploadUrl, {
-      method: "POST",
-      headers: { Authorization: `OAuth ${token}`, file_url: videoUrl },
-    });
-    const uploadData: any = await uploadResponse.json().catch(() => ({}));
-    if (!uploadResponse.ok || uploadData?.error || uploadData?.success === false) throw new Error(graphError(uploadData, `Facebook Reel upload failed (${uploadResponse.status}).`));
-
-    const finishParams: Record<string, string> = {
-      video_id: videoId,
-      upload_phase: "finish",
-      video_state: "PUBLISHED",
-      description: caption,
-      access_token: token,
-    };
-    if (title) finishParams.title = title;
-    const finish = await graphJson(`${GRAPH_BASE}/${encodeURIComponent(pageId)}/video_reels`, {
-      method: "POST",
-      body: new URLSearchParams(finishParams),
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-    });
-
-    return c.json({ ok: true, pageName, pageId, videoId, published: finish?.success !== false, graphVersion: GRAPH_VERSION });
+    const result = await publishFacebookReel(c.env, pageName, videoUrl, caption, title);
+    return c.json({ ok: true, ...result });
   } catch (error) {
     return c.json({ error: "Facebook Reel publishing failed", details: error instanceof Error ? error.message : String(error) }, 502);
   }
