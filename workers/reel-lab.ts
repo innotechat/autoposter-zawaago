@@ -2,6 +2,14 @@ import { Hono } from "hono";
 
 type Env = { AI: Ai };
 
+type NormalizedScene = {
+  scene: number;
+  durationSeconds: number;
+  narration: string;
+  caption: string;
+  visualPrompt: string;
+};
+
 export const reelLabRoutes = new Hono<{ Bindings: Env }>();
 
 const STORYBOARD_SCHEMA = {
@@ -43,19 +51,19 @@ function parseResult(result: any) {
 }
 
 function normalizeStoryboard(value: any) {
-  const scenes = Array.isArray(value?.scenes) ? value.scenes.slice(0, 5) : [];
+  const scenes: any[] = Array.isArray(value?.scenes) ? value.scenes.slice(0, 5) : [];
   if (scenes.length !== 5) throw new Error("Storyboard must contain exactly 5 scenes.");
-  const normalized = scenes.map((scene: any, index: number) => ({
+  const normalized: NormalizedScene[] = scenes.map((scene: any, index: number) => ({
     scene: index + 1,
     durationSeconds: Math.max(3, Math.min(12, Number(scene.durationSeconds) || 7)),
     narration: String(scene.narration || "").trim(),
     caption: String(scene.caption || "").trim(),
     visualPrompt: String(scene.visualPrompt || "").trim(),
   }));
-  if (normalized.some((scene) => scene.narration.length < 8 || scene.visualPrompt.length < 20)) {
+  if (normalized.some((scene: NormalizedScene) => scene.narration.length < 8 || scene.visualPrompt.length < 20)) {
     throw new Error("Storyboard contains incomplete scenes.");
   }
-  const total = normalized.reduce((sum, scene) => sum + scene.durationSeconds, 0);
+  const total = normalized.reduce((sum: number, scene: NormalizedScene) => sum + scene.durationSeconds, 0);
   return {
     title: String(value?.title || "AI Agent vs Chatbot").trim(),
     hook: String(value?.hook || normalized[0].caption).trim(),
