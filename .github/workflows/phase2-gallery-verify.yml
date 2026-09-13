@@ -23,6 +23,9 @@ jobs:
           test -f workers/series.ts
           test -f workers/scheduler.ts
           test -f workers/series-scheduler.ts
+          test -f workers/reel-lab.ts
+          test -f workers/reels.ts
+          test -f workers/facebook-health.ts
           test -f app/routes/gallery.tsx
           test -f app/routes/history.tsx
           test -f app/routes/schedule.tsx
@@ -31,6 +34,8 @@ jobs:
           grep -q 'seriesRoutes' workers/app.ts
           grep -q 'schedulerRoutes' workers/app.ts
           grep -q 'seriesSchedulerRoutes' workers/app.ts
+          grep -q 'facebookHealthRoutes' workers/app.ts
+          grep -q 'reelRoutes' workers/app.ts
           grep -q '/gallery/assets' workers/gallery.ts
           grep -q '/history' workers/history.ts
           grep -q '/autoposter/generate-series' workers/series.ts
@@ -43,6 +48,10 @@ jobs:
           grep -q 'intervalHours' app/routes/autoposter.tsx
           grep -q 'seriesStartAt' app/routes/autoposter.tsx
           grep -q 'seriesIntervals' app/routes/autoposter.tsx
+          grep -q 'video_reels' workers/reels.ts
+          grep -q 'upload_phase' workers/reels.ts
+          grep -q 'etagMatches' workers/scheduler.ts
+          grep -q 'processingStartedAt' workers/scheduler.ts
           ! grep -q 'window.prompt' app/routes/autoposter.tsx
           ! grep -q 'FB_TOKEN?:' workers/api.ts
           ! grep -q 'env.FB_TOKEN[^_]' workers/api.ts
