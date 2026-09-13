@@ -5,6 +5,7 @@ import { galleryRoutes } from "./gallery";
 import { historyRoutes } from "./history";
 import { brandingRoutes } from "./branding";
 import { seriesRoutes } from "./series";
+import { reelLabRoutes } from "./reel-lab";
 import { schedulerRoutes, processDueSchedules } from "./scheduler";
 import { seriesSchedulerRoutes } from "./series-scheduler";
 
@@ -15,6 +16,7 @@ app.route("/api", galleryRoutes);
 app.route("/api", historyRoutes);
 app.route("/api", brandingRoutes);
 app.route("/api", seriesRoutes);
+app.route("/api", reelLabRoutes);
 app.route("/api", schedulerRoutes);
 app.route("/api", seriesSchedulerRoutes);
 app.get("*", (c) => { const requestHandler = createRequestHandler(() => import("virtual:react-router/server-build"), import.meta.env.MODE); return requestHandler(c.req.raw, { cloudflare: { env: c.env as any, ctx: c.executionCtx as any } }); });
