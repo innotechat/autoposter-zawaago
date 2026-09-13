@@ -2,6 +2,7 @@ import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 import type { Route } from "./+types/root";
 import "./app.css";
 import "./visibility.css";
+import "./reel-lab.css";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
