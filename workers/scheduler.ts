@@ -4,9 +4,8 @@ import { sanitizeHistoryError, writeHistory } from "./history";
 const SCHEDULE_PREFIX = "schedules/";
 type BrandName = "Zawaago" | "InnoTech";
 type ScheduleStatus = "scheduled" | "processing" | "published" | "failed" | "cancelled";
-
 type Env = { ASSETS?: R2Bucket; FB_TOKEN_ZAWAAGO?: string; FB_TOKEN_INNOTECH?: string; PAGE_ID_ZAWAAGO: string; PAGE_ID_INNOTECH: string };
-type ScheduleRecord = { id: string; pageName: BrandName; pageId: string; caption: string; imageUrl?: string; withImage: boolean; scheduledAt: string; status: ScheduleStatus; createdAt: string; publishedAt?: string; facebookPostId?: string; error?: string };
+type ScheduleRecord = { id: string; pageName: BrandName; pageId: string; caption: string; imageUrl?: string; withImage: boolean; scheduledAt: string; status: ScheduleStatus; createdAt: string; processingStartedAt?: string; publishedAt?: string; facebookPostId?: string; error?: string };
 
 export const schedulerRoutes = new Hono<{ Bindings: Env }>();
 function normalizeBrand(value: string): BrandName { const v = value.trim().toLowerCase(); if (v === "zawaago") return "Zawaago"; if (v === "innotech" || v === "inno tech") return "InnoTech"; throw new Error("Unsupported Facebook Page. Select Zawaago or InnoTech."); }
@@ -43,4 +42,54 @@ schedulerRoutes.get("/autoposter/schedules", async (c) => { try { if (!c.env.ASS
 
 schedulerRoutes.delete("/autoposter/schedules/:id", async (c) => { try { const id = safeId(c.req.param("id")); const record = await read(c.env, id); if (!record) return c.json({ error: "Schedule not found." }, 404); if (record.status !== "scheduled") return c.json({ error: `Schedule is already ${record.status}.` }, 409); record.status = "cancelled"; await save(c.env, record); return c.json({ ok: true, id }); } catch (error) { return c.json({ error: "Could not cancel schedule", details: error instanceof Error ? error.message : String(error) }, 500); } });
 
-export async function processDueSchedules(env: Env, now = new Date()) { if (!env.ASSETS) return { processed: 0, published: 0, failed: 0 }; const listed = await env.ASSETS.list({ prefix: SCHEDULE_PREFIX, limit: 1000 }); let processed = 0, published = 0, failed = 0; for (const object of listed.objects) { const stored = await env.ASSETS.get(object.key); if (!stored) continue; let record: ScheduleRecord; try { record = await stored.json<ScheduleRecord>(); } catch { continue; } if (record.status !== "scheduled" || new Date(record.scheduledAt).getTime() > now.getTime()) continue; processed += 1; record.status = "processing"; await save(env, record); try { if (record.withImage && record.imageUrl) await validateScheduledImage(env, record.imageUrl); const facebookPostId = await publish(record, env); record.status = "published"; record.publishedAt = new Date().toISOString(); record.facebookPostId = facebookPostId; await save(env, record); await writeHistory(env, { id: record.id, pageName: record.pageName, pageId: record.pageId, contentType: record.withImage ? "image" : "text", caption: record.caption, ...(record.imageUrl ? { imageUrl: record.imageUrl } : {}), ...(facebookPostId ? { facebookPostId } : {}), status: "published", createdAt: record.publishedAt }); published += 1; } catch (error) { const message = error instanceof Error ? error.message : String(error); record.status = "failed"; record.error = sanitizeHistoryError(message); await save(env, record); await writeHistory(env, { id: record.id, pageName: record.pageName, pageId: record.pageId, contentType: record.withImage ? "image" : "text", caption: record.caption, ...(record.imageUrl ? { imageUrl: record.imageUrl } : {}), status: "failed", createdAt: new Date().toISOString(), error: sanitizeHistoryError(message) }); failed += 1; } } return { processed, published, failed }; }
+async function claimScheduledRecord(env: Env, objectKey: string, stored: R2Object, record: ScheduleRecord, now: Date) {
+  if (!env.ASSETS) return false;
+  const claimed: ScheduleRecord = { ...record, status: "processing", processingStartedAt: now.toISOString(), error: undefined };
+  const result = await env.ASSETS.put(objectKey, JSON.stringify(claimed), {
+    onlyIf: { etagMatches: stored.httpEtag },
+    httpMetadata: { contentType: "application/json", cacheControl: "no-store" },
+  });
+  return !!result;
+}
+
+async function recoverStaleProcessing(env: Env, objectKey: string, stored: R2Object, record: ScheduleRecord, now: Date) {
+  if (!env.ASSETS || record.status !== "processing" || !record.processingStartedAt) return false;
+  const started = new Date(record.processingStartedAt).getTime();
+  if (!Number.isFinite(started) || now.getTime() - started < 10 * 60 * 1000) return false;
+  const recovered: ScheduleRecord = { ...record, status: "scheduled", processingStartedAt: undefined, error: "Recovered stale scheduler claim." };
+  const result = await env.ASSETS.put(objectKey, JSON.stringify(recovered), {
+    onlyIf: { etagMatches: stored.httpEtag },
+    httpMetadata: { contentType: "application/json", cacheControl: "no-store" },
+  });
+  return !!result;
+}
+
+export async function processDueSchedules(env: Env, now = new Date()) {
+  if (!env.ASSETS) return { processed: 0, published: 0, failed: 0 };
+  const listed = await env.ASSETS.list({ prefix: SCHEDULE_PREFIX, limit: 1000 }); let processed = 0, published = 0, failed = 0;
+  for (const object of listed.objects) {
+    const stored = await env.ASSETS.get(object.key); if (!stored) continue;
+    let record: ScheduleRecord; try { record = await stored.json<ScheduleRecord>(); } catch { continue; }
+    if (await recoverStaleProcessing(env, object.key, stored, record, now)) continue;
+    if (record.status !== "scheduled" || new Date(record.scheduledAt).getTime() > now.getTime()) continue;
+    const claimed = await claimScheduledRecord(env, object.key, stored, record, now);
+    if (!claimed) continue;
+    processed += 1;
+    const processingRecord: ScheduleRecord = { ...record, status: "processing", processingStartedAt: now.toISOString(), error: undefined };
+    try {
+      if (processingRecord.withImage && processingRecord.imageUrl) await validateScheduledImage(env, processingRecord.imageUrl);
+      const facebookPostId = await publish(processingRecord, env);
+      const publishedRecord: ScheduleRecord = { ...processingRecord, status: "published", processingStartedAt: undefined, publishedAt: new Date().toISOString(), facebookPostId, error: undefined };
+      await save(env, publishedRecord);
+      await writeHistory(env, { id: publishedRecord.id, pageName: publishedRecord.pageName, pageId: publishedRecord.pageId, contentType: publishedRecord.withImage ? "image" : "text", caption: publishedRecord.caption, ...(publishedRecord.imageUrl ? { imageUrl: publishedRecord.imageUrl } : {}), ...(facebookPostId ? { facebookPostId } : {}), status: "published", createdAt: publishedRecord.publishedAt });
+      published += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const failedRecord: ScheduleRecord = { ...processingRecord, status: "failed", processingStartedAt: undefined, error: sanitizeHistoryError(message) };
+      await save(env, failedRecord);
+      await writeHistory(env, { id: failedRecord.id, pageName: failedRecord.pageName, pageId: failedRecord.pageId, contentType: failedRecord.withImage ? "image" : "text", caption: failedRecord.caption, ...(failedRecord.imageUrl ? { imageUrl: failedRecord.imageUrl } : {}), status: "failed", createdAt: new Date().toISOString(), error: sanitizeHistoryError(message) });
+      failed += 1;
+    }
+  }
+  return { processed, published, failed };
+}
