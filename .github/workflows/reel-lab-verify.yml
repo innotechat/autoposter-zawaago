@@ -3,6 +3,8 @@ name: Reel Lab Verify
 on:
   push:
     branches: [reel-lab-test]
+  pull_request:
+    branches: [main]
 
 jobs:
   verify:
