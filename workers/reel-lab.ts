@@ -169,6 +169,12 @@ async function generateMeloAudio(ai: Ai, text: string, language: TtsLanguage) {
   throw new Error("MeloTTS returned an unsupported audio response.");
 }
 
+function audioBody(bytes: Uint8Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
+}
+
 reelLabRoutes.post("/reel-lab/tts", async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
@@ -182,7 +188,7 @@ reelLabRoutes.post("/reel-lab/tts", async (c) => {
 
     if (requestedLanguage === "English") {
       const audio = await generateMeloAudio(c.env.AI, text, language);
-      return new Response(audio, {
+      return new Response(audioBody(audio), {
         headers: { "Content-Type": "audio/mpeg", "Cache-Control": "no-store", "X-TTS-Provider": "melotts", "X-TTS-Language": requestedLanguage },
       });
     }
@@ -190,7 +196,7 @@ reelLabRoutes.post("/reel-lab/tts", async (c) => {
     const apiKey = c.env.SARVAM_API_KEY?.trim();
     if (!apiKey) return c.json({ error: "Sarvam TTS is not configured.", details: "Add the SARVAM_API_KEY Worker secret before generating Hindi, Hinglish or Indian-language Reels." }, 503);
     const audio = await generateSarvamAudio(apiKey, text, language, speaker);
-    return new Response(audio, {
+    return new Response(audioBody(audio), {
       headers: { "Content-Type": "audio/wav", "Cache-Control": "no-store", "X-TTS-Provider": "sarvam-bulbul-v3", "X-TTS-Language": requestedLanguage },
     });
   } catch (error) {
