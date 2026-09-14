@@ -4,7 +4,7 @@ type Env = { ASSETS?: R2Bucket };
 
 const HISTORY_PREFIX = "history/";
 const VALID_BRANDS = new Set(["Zawaago", "InnoTech"]);
-const VALID_STATUSES = new Set(["published", "failed"]);
+const VALID_STATUSES = new Set(["published", "failed", "draft"]);
 
 type HistoryRecord = {
   id: string;
@@ -16,7 +16,7 @@ type HistoryRecord = {
   videoUrl?: string;
   imageKey?: string;
   facebookPostId?: string;
-  status: "published" | "failed";
+  status: "published" | "failed" | "draft";
   createdAt: string;
   error?: string;
 };
