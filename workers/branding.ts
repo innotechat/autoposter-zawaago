@@ -23,21 +23,37 @@ brandingRoutes.post("/autoposter/assets/brand", async (c) => {
   try {
     if (!c.env.ASSETS) return c.json({ error: "Image storage is not configured" }, 503);
 
-    const form = await c.req.parseBody();
-    const file = form.file;
-    const brandValue = typeof form.pageName === "string" ? form.pageName : "";
+    const contentTypeHeader = c.req.header("content-type") || "";
+    if (!contentTypeHeader.toLowerCase().includes("multipart/form-data")) {
+      return c.json({ error: "Branded image upload must use multipart/form-data" }, 415);
+    }
 
-    if (!file || typeof file === "string" || Array.isArray(file) || typeof (file as any).arrayBuffer !== "function") {
+    // Use the platform Request/FormData parser directly. This avoids relying on
+    // Hono's parseBody coercion for browser-generated File objects.
+    const form = await c.req.raw.formData();
+    const fileValue = form.get("file");
+    const brandValue = form.get("pageName");
+
+    if (!(fileValue instanceof File) && !(fileValue instanceof Blob)) {
       return c.json({ error: "Branded image file is required" }, 400);
     }
-    const uploadedFile = file as Blob & { type: string; size: number };
-    const brand = normalizeBrand(brandValue);
-    const contentType = uploadedFile.type.toLowerCase();
-    if (!["image/jpeg", "image/png", "image/webp"].includes(contentType)) {
-      return c.json({ error: "Only JPEG, PNG or WebP branded assets are accepted" }, 400);
+    if (typeof brandValue !== "string") {
+      return c.json({ error: "Brand name is required" }, 400);
     }
-    if (uploadedFile.size < 1000) return c.json({ error: "Branded image is unexpectedly small" }, 400);
-    if (uploadedFile.size > 12 * 1024 * 1024) return c.json({ error: "Branded image exceeds the 12 MB limit" }, 413);
+
+    const brand = normalizeBrand(brandValue);
+    const uploadedFile = fileValue as Blob;
+    const contentType = (uploadedFile.type || "").toLowerCase();
+
+    if (!["image/jpeg", "image/png", "image/webp"].includes(contentType)) {
+      return c.json({ error: "Only JPEG, PNG or WebP branded assets are accepted", details: `Received content type: ${contentType || "unknown"}` }, 400);
+    }
+    if (uploadedFile.size < 1000) {
+      return c.json({ error: "Branded image is unexpectedly small", details: `Received ${uploadedFile.size} bytes` }, 400);
+    }
+    if (uploadedFile.size > 12 * 1024 * 1024) {
+      return c.json({ error: "Branded image exceeds the 12 MB limit" }, 413);
+    }
 
     const key = `generated/${brand}/branded/${Date.now()}-${crypto.randomUUID()}.${extensionFor(contentType)}`;
     await c.env.ASSETS.put(key, await uploadedFile.arrayBuffer(), {
