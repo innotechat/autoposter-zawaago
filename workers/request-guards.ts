@@ -48,6 +48,12 @@ export async function reelRequestGuard(c: Context, next: Next) {
 
 export async function publicAssetGuard(c: Context, next: Next) {
   const prefix = "/api/autoposter/assets/";
+
+  // POST /brand is the Studio's browser-side branding upload. Keep normal
+  // generated-asset reads protected by the path safety checks below, while
+  // allowing this internal upload route to reach brandingRoutes.
+  if (c.req.path === `${prefix}brand` && c.req.method === "POST") return next();
+
   if (!c.req.path.startsWith(prefix)) return next();
   let key = "";
   try {
