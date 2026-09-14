@@ -28,4 +28,6 @@ app.route("/api", seriesSchedulerRoutes);
 app.route("/api", facebookHealthRoutes);
 app.route("/api", reelRoutes);
 app.get("*", (c) => { const requestHandler = createRequestHandler(() => import("virtual:react-router/server-build"), import.meta.env.MODE); return requestHandler(c.req.raw, { cloudflare: { env: c.env as any, ctx: c.executionCtx as any } }); });
+
+// Reel production checkpoint: keep this entrypoint deployable from main after every verified Reel fix.
 export default { fetch: app.fetch, async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext) { await processDueSchedules(env); } };
