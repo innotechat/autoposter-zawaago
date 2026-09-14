@@ -2,7 +2,7 @@ name: Reel Lab Verify
 
 on:
   push:
-    branches: [reel-lab-test]
+    branches: [feat/production-reel-studio]
   pull_request:
     branches: [main]
 
@@ -20,13 +20,17 @@ jobs:
       - run: npm run build
       - run: |
           test -f workers/reel-lab.ts
-          test -f app/routes/reel-lab.tsx
-          test -f app/reel-lab.css
+          test -f app/components/reel-composer-v2.tsx
+          test -f app/reel-studio.css
           grep -q 'reelLabRoutes' workers/app.ts
           grep -q '/reel-lab/storyboard' workers/reel-lab.ts
           grep -q '/reel-lab/tts' workers/reel-lab.ts
-          grep -q '@cf/deepgram/aura-2-en' workers/reel-lab.ts
-          grep -q 'Portrait 9:16' app/routes/reel-lab.tsx
-          grep -q 'MediaRecorder' app/routes/reel-lab.tsx
-          grep -q 'reel-lab' app/routes.ts
-          ! grep -q 'post-now' app/routes/reel-lab.tsx
+          grep -q 'bulbul:v3' workers/reel-lab.ts
+          grep -q 'SARVAM_API_KEY' workers/reel-lab.ts
+          grep -q '@cf/myshell-ai/melotts' workers/reel-lab.ts
+          grep -q 'MediaRecorder' app/components/reel-composer-v2.tsx
+          grep -q 'video/mp4' app/components/reel-composer-v2.tsx
+          grep -q 'Generate 4 Remaining Visuals' app/components/reel-composer-v2.tsx
+          grep -q 'Create Reel Video' app/components/reel-composer-v2.tsx
+          grep -q 'Download MP4' app/components/reel-composer-v2.tsx
+          grep -q 'reel-composer-v2' app/routes/autoposter-branded.tsx
