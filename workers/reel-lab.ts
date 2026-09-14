@@ -1,6 +1,7 @@
 import { Hono } from "hono";
+import { writeHistory } from "./history";
 
-type Env = { AI: Ai; ASSETS?: R2Bucket };
+type Env = { AI: Ai; ASSETS?: R2Bucket; PAGE_ID_ZAWAAGO: string; PAGE_ID_INNOTECH: string };
 type BrandName = "Zawaago" | "InnoTech";
 type NormalizedScene = { scene: number; durationSeconds: number; narration: string; caption: string; visualPrompt: string };
 export const reelLabRoutes = new Hono<{ Bindings: Env }>();
@@ -64,12 +65,17 @@ reelLabRoutes.post("/reel-lab/assets", async (c) => {
     if (!(file instanceof File)) return c.json({ error: "Reel video file is required." }, 400);
     const contentType = file.type.toLowerCase(); if (contentType !== "video/mp4") return c.json({ error: "Only MP4 Reels are accepted for production storage." }, 415); if (file.size < 1000) return c.json({ error: "Reel file is unexpectedly small." }, 400); if (file.size > 100 * 1024 * 1024) return c.json({ error: "Reel file exceeds the 100 MB upload limit." }, 413);
     const safeBrand = pageName === "InnoTech" ? "innotech" : "zawaago"; const key = `generated/${safeBrand}/reels/${Date.now()}-${crypto.randomUUID()}.mp4`;
-    // Materialize the multipart File before the R2 write. This avoids relying on the
-    // request body's one-shot stream while the Worker is processing the upload.
     const bytes = await file.arrayBuffer();
     await c.env.ASSETS.put(key, bytes, { httpMetadata: { contentType: "video/mp4", cacheControl: "public, max-age=31536000, immutable" }, customMetadata: { brand: safeBrand, source: "reel-lab", format: "mp4" } });
     const saved = await c.env.ASSETS.head(key);
     if (!saved) return c.json({ error: "Reel upload could not be verified in R2." }, 502);
-    return c.json({ ok: true, pageName, key, videoUrl: `${new URL(c.req.url).origin}/api/autoposter/assets/${encodeURIComponent(key)}`, size: file.size, contentType, etag: saved.httpEtag });
+    const videoUrl = `${new URL(c.req.url).origin}/api/autoposter/assets/${encodeURIComponent(key)}`;
+    const pageId = pageName === "Zawaago" ? c.env.PAGE_ID_ZAWAAGO : c.env.PAGE_ID_INNOTECH;
+    try {
+      await writeHistory(c.env, { id: crypto.randomUUID(), pageName, pageId, contentType: "reel", caption: String(form.get("caption") || "Reel draft"), videoUrl, status: "draft", createdAt: new Date().toISOString() });
+    } catch {
+      // R2 media persistence is the source of truth; history is best-effort and must not fail a successful upload.
+    }
+    return c.json({ ok: true, pageName, key, videoUrl, size: file.size, contentType, etag: saved.httpEtag, historyStatus: "draft" });
   } catch (error) { return c.json({ error: "Reel asset upload failed", details: error instanceof Error ? error.message : String(error) }, 500); }
 });
