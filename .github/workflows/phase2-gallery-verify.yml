@@ -3,6 +3,8 @@ name: Phase 2 Production Verify
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
   verify:
@@ -30,6 +32,8 @@ jobs:
           test -f app/routes/gallery.tsx
           test -f app/routes/history.tsx
           test -f app/routes/schedule.tsx
+          test -f app/components/reel-composer-v2.tsx
+          test -f app/reel-studio.css
           grep -q 'galleryRoutes' workers/app.ts
           grep -q 'historyRoutes' workers/app.ts
           grep -q 'seriesRoutes' workers/app.ts
@@ -57,6 +61,9 @@ jobs:
           grep -q 'upload_phase' workers/reels.ts
           grep -q 'etagMatches' workers/scheduler.ts
           grep -q 'processingStartedAt' workers/scheduler.ts
+          grep -q 'SARVAM_API_KEY' workers/reel-lab.ts
+          grep -q '@cf/myshell-ai/melotts' workers/reel-lab.ts
+          grep -q 'bulbul:v3' workers/reel-lab.ts
           ! grep -q 'window.prompt' app/routes/autoposter.tsx
           ! grep -q 'FB_TOKEN?:' workers/api.ts
           ! grep -q 'env.FB_TOKEN[^_]' workers/api.ts
