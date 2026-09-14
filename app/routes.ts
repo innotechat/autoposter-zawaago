@@ -5,5 +5,4 @@ export default [
   route("gallery", "routes/gallery.tsx"),
   route("history", "routes/history.tsx"),
   route("schedule", "routes/schedule.tsx"),
-  route("reel-lab", "routes/reel-lab.tsx"),
 ] satisfies RouteConfig;
