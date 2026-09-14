@@ -34,7 +34,9 @@ brandingRoutes.post("/autoposter/assets/brand", async (c) => {
     const fileValue = form.get("file");
     const brandValue = form.get("pageName");
 
-    if (!(fileValue instanceof File) && !(fileValue instanceof Blob)) {
+    // Cloudflare's TypeScript runtime does not guarantee File/Blob globals for
+    // instanceof checks. Validate by capability instead.
+    if (!fileValue || typeof fileValue === "string" || typeof (fileValue as any).arrayBuffer !== "function") {
       return c.json({ error: "Branded image file is required" }, 400);
     }
     if (typeof brandValue !== "string") {
@@ -42,7 +44,7 @@ brandingRoutes.post("/autoposter/assets/brand", async (c) => {
     }
 
     const brand = normalizeBrand(brandValue);
-    const uploadedFile = fileValue as Blob;
+    const uploadedFile = fileValue as unknown as Blob;
     const contentType = (uploadedFile.type || "").toLowerCase();
 
     if (!["image/jpeg", "image/png", "image/webp"].includes(contentType)) {
