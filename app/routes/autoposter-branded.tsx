@@ -1,4 +1,5 @@
 import "../reel-studio.css";
+import "../reel-engine-v1.css";
 import { useEffect } from "react";
 import Autoposter from "./autoposter";
 import ReelComposer from "../components/reel-composer-v2";
