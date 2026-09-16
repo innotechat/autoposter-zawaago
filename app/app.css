@@ -36,7 +36,8 @@ button:disabled { cursor: not-allowed; }
 
 .workspace-grid { display:grid; grid-template-columns:minmax(340px,.86fr) minmax(480px,1.14fr); gap:18px; align-items:start; }
 .panel { background:rgba(255,255,255,.88); border:1px solid rgba(30,30,30,.1); border-radius:18px; box-shadow:0 8px 32px rgba(20,20,20,.055); overflow:hidden; }
-.composer-panel, .preview-panel { padding:22px; }
+.composer-panel, .preview-panel, .publish-panel { padding:22px; }
+.publish-panel { margin-top:18px; }
 .panel-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; padding-bottom:18px; border-bottom:1px solid #ecebe8; }
 .panel-heading > div { display:flex; align-items:center; gap:9px; }
 .panel-heading h3 { margin:0; font-size:16px; font-weight:700; letter-spacing:-.025em; }
@@ -110,6 +111,10 @@ button:disabled { cursor: not-allowed; }
 .publish-secondary:hover:not(:disabled) { background:#f0efec; }
 .publish-secondary:disabled, .publish-primary:disabled, .primary-action:disabled { opacity:.42; }
 
+.publish-actions { display:grid; grid-template-columns:1fr 1.25fr; gap:12px; margin-top:16px; }
+.publish-actions button.secondary-action, .publish-actions button.primary-action { margin-top:0; width:100%; min-height:44px; font-size:12px; font-weight:700; border-radius:10px; }
+.primary-action.compact, .secondary-action.compact { min-height:40px; margin-top:0; padding:0 14px; font-size:12px; }
+
 .status-banner { margin-top:14px; min-height:44px; display:flex; align-items:center; gap:9px; padding:0 13px; border-radius:11px; border:1px solid #ddd; font-size:11px; }
 .status-banner.success { background:#edf8f3; border-color:#cfe9dd; color:#246b50; }
 .status-banner.error { background:#fff2f0; border-color:#f1d0cb; color:#9d3d34; }
@@ -142,7 +147,10 @@ button:disabled { cursor: not-allowed; }
   .hero-strip { margin:14px 0; padding:21px 19px; border-radius:16px; }
   .hero-strip h2 { font-size:26px; }
   .hero-strip p { font-size:11px; }
-  .composer-panel, .preview-panel { padding:15px; border-radius:15px; }
+  .composer-panel, .preview-panel, .publish-panel { padding:16px; border-radius:16px; }
+  .publish-panel { margin-top:14px; }
+  .publish-actions { grid-template-columns:1fr; gap:9px; margin-top:14px; }
+  .publish-actions button.secondary-action, .publish-actions button.primary-action { min-height:44px; font-size:12px; }
   .field-grid, .page-switcher { grid-template-columns:1fr; }
   .preview-actions .small-action { padding:7px; }
   .caption-editor { min-height:240px; }

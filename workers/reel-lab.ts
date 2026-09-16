@@ -5,7 +5,7 @@ type Env = {
   ASSETS?: R2Bucket;
   SARVAM_API_KEY?: string;
 };
-type BrandName = "Zawaago" | "InnoTech";
+type BrandName = "Zawaago" | "InnoTech" | "None" | "Custom";
 type NormalizedScene = { scene: number; durationSeconds: number; narration: string; caption: string; visualPrompt: string };
 type TtsLanguage = { label: string; sarvamCode?: string; meloCode?: string };
 
@@ -66,7 +66,9 @@ function normalizeBrand(value: string): BrandName {
   const brand = value.trim().toLowerCase();
   if (brand === "zawaago") return "Zawaago";
   if (brand === "innotech" || brand === "inno tech") return "InnoTech";
-  throw new Error("Unsupported Facebook Page. Select Zawaago or InnoTech.");
+  if (brand === "none" || brand === "no brand" || brand === "unbranded" || brand === "") return "None";
+  if (brand === "custom") return "Custom";
+  return "Zawaago";
 }
 
 function parseResult(result: any) {
@@ -103,7 +105,10 @@ reelLabRoutes.post("/reel-lab/storyboard", async (c) => {
     const language = String(body.language || "Hinglish").trim();
     const audience = String(body.audience || "Business Owners and Professionals").trim();
     const sourceCaption = String(body.sourceCaption || "").trim();
-    const prompt = `You are the senior short-form educational video strategist for ${pageName}. Create one original 35-45 second faceless educational Reel storyboard about: ${topic}.\n\nAudience: ${audience}\nLanguage: ${language}\nBrand positioning: practical, credible AI and technology education.\n${sourceCaption ? `Source post context (use as context, do not repeat it verbatim): ${sourceCaption.slice(0, 900)}\n` : ""}\nCreate exactly five scenes:\n1) 0-3/4 sec: a strong non-clickbait hook.\n2) Problem/misconception.\n3) Clear explanation.\n4) Concrete business example or workflow.\n5) Takeaway + natural follow CTA.\n\nRules:\n- Teach one useful idea; do not use filler.\n- Use natural spoken ${language}. Hindi must use Devanagari; Hinglish should mix Hindi and English naturally; regional languages should use their native script.\n- No fake statistics, invented case studies, unsupported claims or exaggerated promises.\n- Narration must sound natural when spoken aloud.\n- Caption should be short enough for mobile viewing and match the narration.\n- VisualPrompt must describe only the visual scene. Never request logos, brand names, text, letters, numbers, subtitles, watermarks or fake UI inside the generated artwork. Leave safe negative space for later branding/captions.\n- Use visually different scenes with a coherent premium editorial style.\n- Return valid JSON matching the supplied schema.`;
+    const brandContext = pageName === "None" || pageName === "Custom"
+      ? "You are a senior short-form educational video strategist. Create one original 35-45 second faceless educational Reel storyboard"
+      : `You are the senior short-form educational video strategist for ${pageName}. Create one original 35-45 second faceless educational Reel storyboard`;
+    const prompt = `${brandContext} about: ${topic}.\n\nAudience: ${audience}\nLanguage: ${language}\nBrand positioning: practical, credible AI and technology education.\n${sourceCaption ? `Source post context (use as context, do not repeat it verbatim): ${sourceCaption.slice(0, 900)}\n` : ""}\nCreate exactly five scenes:\n1) 0-3/4 sec: a strong non-clickbait hook.\n2) Problem/misconception.\n3) Clear explanation.\n4) Concrete business example or workflow.\n5) Takeaway + natural follow CTA.\n\nRules:\n- Teach one useful idea; do not use filler.\n- Use natural spoken ${language}. Hindi must use Devanagari; Hinglish should mix Hindi and English naturally; regional languages should use their native script.\n- No fake statistics, invented case studies, unsupported claims or exaggerated promises.\n- Narration must sound natural when spoken aloud.\n- Caption should be short enough for mobile viewing and match the narration.\n- VisualPrompt must describe only the visual scene. Never request logos, brand names, text, letters, numbers, subtitles, watermarks or fake UI inside the generated artwork. Leave safe negative space for later branding/captions.\n- Use visually different scenes with a coherent premium editorial style.\n- Return valid JSON matching the supplied schema.`;
     const models = ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/google/gemma-4-26b-a4b-it"];
     let lastError = "";
     for (const model of models) {
@@ -215,7 +220,7 @@ reelLabRoutes.post("/reel-lab/assets", async (c) => {
     if (contentType !== "video/mp4") return c.json({ error: "Only MP4 Reels are accepted for production storage." }, 415);
     if (file.size < 1000) return c.json({ error: "Reel file is unexpectedly small." }, 400);
     if (file.size > 100 * 1024 * 1024) return c.json({ error: "Reel file exceeds the 100 MB upload limit." }, 413);
-    const safeBrand = pageName === "InnoTech" ? "innotech" : "zawaago";
+    const safeBrand = pageName === "InnoTech" ? "innotech" : pageName === "None" || pageName === "Custom" ? "unbranded" : "zawaago";
     const key = `generated/${safeBrand}/reels/${Date.now()}-${crypto.randomUUID()}.mp4`;
     const bytes = await file.arrayBuffer();
     await c.env.ASSETS.put(key, bytes, { httpMetadata: { contentType: "video/mp4", cacheControl: "public, max-age=31536000, immutable" }, customMetadata: { brand: safeBrand, source: "reel-composer", format: "mp4" } });

@@ -46,9 +46,12 @@ function buildPromptPresets(page: string, contentType: string, tone: string, lan
   ];
 }
 
+export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
 type SeriesPost = { episode: number; title: string; hook: string; caption: string; visualPrompt: string; imageUrl?: string };
 
-export default function Autoposter() {
+export default function Autoposter({ fetcher, children }: { fetcher?: FetchLike; children?: React.ReactNode } = {}) {
+  const customFetch = fetcher || (typeof window !== "undefined" ? window.fetch.bind(window) : fetch);
   const [page, setPage] = useState("Zawaago");
   const [topic, setTopic] = useState("How AI Agents save time for business owners");
   const [contentType, setContentType] = useState(contentTypes[0]);
@@ -95,13 +98,13 @@ export default function Autoposter() {
     if (!topic.trim()) return setStatus({ type: "error", text: "Add a core idea first so the AI knows what to create." });
     setBusy("generate"); setStatus({ type: "info", text: "Creating caption and visual automatically…" });
     try {
-      const res = await fetch("/api/autoposter/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(briefPayload) });
+      const res = await customFetch("/api/autoposter/generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(briefPayload) });
       const data: any = await res.json(); if (!res.ok) throw new Error(data.details || data.error || "Generation failed");
       const nextCaption = data.caption || "";
       const nextPrompt = data.imagePrompt || "";
       setCaption(nextCaption); setImagePrompt(nextPrompt); setImageUrl(""); setActiveTab("image");
       setStatus({ type: "info", text: "Caption ready. Generating the branded visual…" });
-      const imageRes = await fetch("/api/autoposter/generate-image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...briefPayload, imgPrompt: nextPrompt }) });
+      const imageRes = await customFetch("/api/autoposter/generate-image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...briefPayload, imgPrompt: nextPrompt }) });
       const imageData: any = await imageRes.json();
       if (!imageRes.ok || !imageData.imageUrl) throw new Error(imageData.details || imageData.error || "Visual generation failed");
       setImageUrl(imageData.imageUrl); setImagePrompt(imageData.prompt || nextPrompt);
@@ -114,7 +117,7 @@ export default function Autoposter() {
     const selectedPrompt = promptOverride ?? imagePrompt;
     setBusy("image"); setStatus({ type: "info", text: "Generating a high-quality visual from the selected settings…" });
     try {
-      const res = await fetch("/api/autoposter/generate-image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...briefPayload, imgPrompt: selectedPrompt }) });
+      const res = await customFetch("/api/autoposter/generate-image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...briefPayload, imgPrompt: selectedPrompt }) });
       const data: any = await res.json(); if (!res.ok) throw new Error(data.details || data.error || "Image generation failed");
       setImageUrl(data.imageUrl || ""); setImagePrompt(data.prompt || selectedPrompt); setActiveTab("image"); setStatus({ type: "success", text: "Visual regenerated · Cloudflare AI + R2 · no generator watermark." });
     } catch (error) { setStatus({ type: "error", text: friendlyError(error) }); } finally { setBusy(null); }
@@ -124,7 +127,7 @@ export default function Autoposter() {
     if (!topic.trim()) return setStatus({ type: "error", text: "Add a core idea for the education series first." });
     setBusy("series"); setStatus({ type: "info", text: `Building a ${seriesLength}-part education series with a ${intervalHours}-hour posting interval…` });
     try {
-      const res = await fetch("/api/autoposter/generate-series", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...briefPayload, seriesLength, intervalHours }) });
+      const res = await customFetch("/api/autoposter/generate-series", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...briefPayload, seriesLength, intervalHours }) });
       const data: any = await res.json(); if (!res.ok) throw new Error(data.details || data.error || "Series generation failed");
       const generated = Array.isArray(data.series) ? data.series : [];
       if (!generated.length) throw new Error("The education series returned no episodes.");
@@ -132,7 +135,7 @@ export default function Autoposter() {
       for (let index = 0; index < generated.length; index += 1) {
         const post = generated[index] as SeriesPost;
         setStatus({ type: "info", text: `Generating branded episode visual ${index + 1}/${generated.length}…` });
-        const imageRes = await fetch("/api/autoposter/generate-image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...briefPayload, topic: `${topic} · ${post.title}`, imgPrompt: post.visualPrompt }) });
+        const imageRes = await customFetch("/api/autoposter/generate-image", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...briefPayload, topic: `${topic} · ${post.title}`, imgPrompt: post.visualPrompt }) });
         const imageData: any = await imageRes.json();
         if (!imageRes.ok || !imageData.imageUrl) throw new Error(imageData.details || imageData.error || `Episode ${index + 1} visual failed`);
         completed.push({ ...post, imageUrl: imageData.imageUrl });
@@ -152,7 +155,7 @@ export default function Autoposter() {
     setBusy("series"); setStatus({ type: "info", text: `Queueing ${series.length} episodes on ${selectedPage.name}…` });
     try {
       const posts = series.map((post) => ({ caption: post.caption, imageUrl: post.imageUrl as string, withImage: true }));
-      const scheduleRes = await fetch("/api/autoposter/schedules/series", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page, startAt: start.toISOString(), intervalHours, posts }) });
+      const scheduleRes = await customFetch("/api/autoposter/schedules/series", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page, startAt: start.toISOString(), intervalHours, posts }) });
       const scheduleData: any = await scheduleRes.json();
       if (!scheduleRes.ok) throw new Error(scheduleData.details || scheduleData.error || "Series scheduling failed");
       setShowSeries(false); setStatus({ type: "success", text: `${scheduleData.schedules?.length || posts.length} posts scheduled successfully on ${selectedPage.name}. Existing generated visuals will be used.` });
@@ -171,11 +174,11 @@ export default function Autoposter() {
     if (!caption.trim()) return setStatus({ type: "error", text: "Write or generate a caption before publishing." });
     if (withImage && !imageUrl) return setStatus({ type: "error", text: "Generate a visual before publishing an image post." });
     setBusy(withImage ? "photo" : "text"); setStatus({ type: "info", text: withImage ? `Publishing image to ${selectedPage.name}…` : `Publishing text to ${selectedPage.name}…` });
-    try { const res = await fetch("/api/autoposter/post-now", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page, caption, imageUrl, withImage }) }); const data: any = await res.json(); if (!res.ok || data.error) throw new Error(data.details || data.error || "Facebook post failed"); setStatus({ type: "success", text: `Published successfully to ${selectedPage.name}. Post ID: ${data.id || "accepted"}` }); }
+    try { const res = await customFetch("/api/autoposter/post-now", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page, caption, imageUrl, withImage }) }); const data: any = await res.json(); if (!res.ok || data.error) throw new Error(data.details || data.error || "Facebook post failed"); setStatus({ type: "success", text: `Published successfully to ${selectedPage.name}. Post ID: ${data.id || "accepted"}` }); }
     catch (error) { setStatus({ type: "error", text: friendlyError(error) }); } finally { setBusy(null); }
   }
 
-  async function checkHealth() { setBusy("health"); try { const res = await fetch("/api/autoposter/health"); const data: any = await res.json(); if (!res.ok) throw new Error(data.error || "Health check failed"); setHealth(data); setShowHealth(true); setStatus({ type: "success", text: "System check completed." }); } catch (error) { setStatus({ type: "error", text: friendlyError(error) }); } finally { setBusy(null); } }
+  async function checkHealth() { setBusy("health"); try { const res = await customFetch("/api/autoposter/health"); const data: any = await res.json(); if (!res.ok) throw new Error(data.error || "Health check failed"); setHealth(data); setShowHealth(true); setStatus({ type: "success", text: "System check completed." }); } catch (error) { setStatus({ type: "error", text: friendlyError(error) }); } finally { setBusy(null); } }
   function clearDraft() { setCaption(""); setImageUrl(""); setImagePrompt(""); setStatus({ type: "info", text: "Draft cleared. Your brief settings are kept." }); }
   const statusIcon = status.type === "success" ? <CheckCircle size={19} weight="fill" /> : status.type === "error" ? <WarningCircle size={19} weight="fill" /> : <Pulse size={19} />;
 
@@ -199,7 +202,8 @@ export default function Autoposter() {
           {status.text && <div className={`status-banner ${status.type}`}><span>{statusIcon}</span><span>{status.text}</span></div>}
         </section>
       </div>
-      <section className="panel publish-panel"><div className="panel-heading"><div><span className="section-number">03</span><h3>Publish</h3></div><span className="muted-label">Selected: {selectedPage.name}</span></div><div className="publish-actions"><button className="secondary-action" disabled={!canPublish} onClick={() => postNow(false)}><FacebookLogo size={18} weight="fill" /> {busy === "text" ? "Publishing…" : "Post text"}</button><button className="primary-action compact" disabled={!canPublish || !imageUrl} onClick={() => postNow(true)}><CloudArrowUp size={18} weight="fill" /> {busy === "photo" ? "Publishing…" : "Post with image"}</button></div></section>
+      <section className="panel publish-panel"><div className="panel-heading"><div><span className="section-number">03</span><h3>Publish</h3></div><span className="muted-label">Selected: {selectedPage.name}</span></div><div className="publish-actions"><button type="button" className="secondary-action" disabled={!canPublish} onClick={() => postNow(false)}><FacebookLogo size={18} weight="fill" /> {busy === "text" ? "Publishing…" : "Post text"}</button><button type="button" className="primary-action compact" disabled={!canPublish || !imageUrl} onClick={() => postNow(true)}><CloudArrowUp size={18} weight="fill" /> {busy === "photo" ? "Publishing…" : "Post with image"}</button></div></section>
+      {children}
     </div>
     {showSeries && <div className="modal-backdrop" onClick={() => setShowSeries(false)}><div className="modal-card max-w-3xl" onClick={(e) => e.stopPropagation()}><div className="modal-heading"><div><span className="modal-eyebrow"><Sparkle size={14} weight="fill" /> EDUCATION SERIES</span><h3>{series.length}-part learning series</h3><p>Generated from your current Page, topic, tone, language, audience and creative settings.</p></div><button className="icon-button small" onClick={() => setShowSeries(false)} aria-label="Close series"><X size={18} /></button></div><div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4"><div className="rounded-xl border border-black/8 bg-[#faf9f7] p-3"><small className="block text-xs text-black/45">Posts</small><strong>{series.length}</strong></div><div className="rounded-xl border border-black/8 bg-[#faf9f7] p-3"><small className="block text-xs text-black/45">Interval</small><strong>{intervalHours}h</strong></div><div className="rounded-xl border border-black/8 bg-[#faf9f7] p-3"><small className="block text-xs text-black/45">Page</small><strong>{page}</strong></div><div className="rounded-xl border border-black/8 bg-[#faf9f7] p-3"><small className="block text-xs text-black/45">Language</small><strong>{language}</strong></div></div>
       <div className="mb-4 rounded-2xl border border-black/8 bg-[#faf9f7] p-4"><div className="mb-3 flex items-center justify-between gap-3"><div><strong className="text-sm">Schedule this series</strong><p className="mt-1 text-xs leading-5 text-black/55">Choose the first publish time and how far apart the episodes should be. All times use your device's local timezone.</p></div><CalendarCheck size={20} /></div><div className="grid gap-3 sm:grid-cols-2"><div className="field-group"><label>Start date & time</label><input type="datetime-local" value={seriesStartAt} min={toDateTimeLocalValue(new Date(Date.now() + 30 * 1000))} onChange={(e) => setSeriesStartAt(e.target.value)} /></div><div className="field-group"><label>Time gap between posts</label><select value={intervalHours} onChange={(e) => setIntervalHours(Number(e.target.value))}>{seriesIntervals.map((hours) => <option key={hours} value={hours}>{hours === 1 ? "Every 1 hour" : hours < 24 ? `Every ${hours} hours` : hours === 24 ? "Every day (24 hours)" : hours === 48 ? "Every 2 days (48 hours)" : hours === 72 ? "Every 3 days (72 hours)" : "Every 7 days (168 hours)"}</option>)}</select></div></div><div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-black/50"><span>First post: {seriesStartAt ? new Date(seriesStartAt).toLocaleString() : "Not selected"}</span><span>Last post: {series.length && seriesStartAt ? new Date(new Date(seriesStartAt).getTime() + (series.length - 1) * intervalHours * 60 * 60 * 1000).toLocaleString() : "—"}</span></div></div>
