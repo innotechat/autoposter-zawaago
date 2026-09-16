@@ -12,7 +12,7 @@ import { facebookHealthRoutes } from "./facebook-health";
 import { reelRoutes } from "./reels";
 import { publicAssetGuard, reelRequestGuard } from "./request-guards";
 
-type Env = { AI: Ai; FB_TOKEN_ZAWAAGO?: string; FB_TOKEN_INNOTECH?: string; PAGE_ID_ZAWAAGO: string; PAGE_ID_INNOTECH: string; ASSETS?: R2Bucket };
+type Env = { AI: Ai; FB_TOKEN_ZAWAAGO?: string; FB_TOKEN_INNOTECH?: string; PAGE_ID_ZAWAAGO: string; PAGE_ID_INNOTECH: string; ASSETS?: R2Bucket; DB?: D1Database };
 const app = new Hono<{ Bindings: Env }>();
 app.use("/api/autoposter/assets/*", publicAssetGuard);
 app.use("/api/reel-lab/*", reelRequestGuard);

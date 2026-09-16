@@ -13,6 +13,13 @@
       "bucket_name": "zawaago-autoposter-assets"
     }
   ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "autoposter-db",
+      "database_id": "autoposter-d1-local"
+    }
+  ],
   "vars": {
     "PAGE_ID_ZAWAAGO": "113167943749510",
     "PAGE_ID_INNOTECH": "102440764818837"

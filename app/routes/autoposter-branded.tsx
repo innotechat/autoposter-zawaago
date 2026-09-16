@@ -66,11 +66,17 @@ async function applyBranding(imageUrl: string, pageName: BrandName, branding: st
   return data.imageUrl as string;
 }
 
+// Store the pristine native fetch reference at module load time before any possible interception
+const nativeFetch: FetchLike =
+  typeof window !== "undefined" && typeof window.fetch === "function"
+    ? window.fetch.bind(window)
+    : (fetch as unknown as FetchLike);
+
 export default function BrandedAutoposter() {
   const wrappedFetcher: FetchLike = useMemo(() => {
     return async (input: RequestInfo | URL, init?: RequestInit) => {
-      const baseFetch = (typeof window !== "undefined" ? window.fetch.bind(window) : fetch) as FetchLike;
-      const response = await baseFetch(input, init);
+      // Always invoke nativeFetch so we NEVER recurse into wrappedFetcher
+      const response = await nativeFetch(input, init);
       const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
       if (!url.endsWith("/api/autoposter/generate-image") || !response.ok) return response;
       const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
@@ -99,7 +105,8 @@ export default function BrandedAutoposter() {
       try {
         const data: any = await response.clone().json();
         if (!data?.imageUrl) throw new Error("Generated visual did not return an image URL.");
-        const branded = await applyBranding(data.imageUrl, pageName, branding, logoPosition, baseFetch);
+        // Use nativeFetch for loading logo assets and uploading the branded result
+        const branded = await applyBranding(data.imageUrl, pageName, branding, logoPosition, nativeFetch);
         localStorage.setItem(
           "autoposter:latest-creative",
           JSON.stringify({
@@ -127,42 +134,6 @@ export default function BrandedAutoposter() {
       }
     };
   }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const descriptor = Object.getOwnPropertyDescriptor(window, "fetch");
-    let overridden = false;
-
-    try {
-      Object.defineProperty(window, "fetch", {
-        value: wrappedFetcher,
-        writable: true,
-        configurable: true,
-      });
-      overridden = true;
-    } catch {
-      try {
-        (window as any).fetch = wrappedFetcher;
-        overridden = true;
-      } catch {
-        // Safe fallback: window.fetch has only a getter or is read-only in this window/iframe.
-        // Autoposter receives wrappedFetcher directly via the fetcher prop.
-      }
-    }
-
-    return () => {
-      if (!overridden) return;
-      try {
-        if (descriptor) {
-          Object.defineProperty(window, "fetch", descriptor);
-        } else {
-          delete (window as any).fetch;
-        }
-      } catch {
-        // Safe cleanup ignore
-      }
-    };
-  }, [wrappedFetcher]);
 
   return (
     <Autoposter fetcher={wrappedFetcher}>

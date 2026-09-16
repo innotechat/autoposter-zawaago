@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowClockwise,
   CalendarCheck,
   CheckCircle,
   Copy,
   FilmStrip,
+  HardDrives,
   Image as ImageIcon,
   Play,
   Sparkle,
@@ -20,6 +22,22 @@ type ReelLanguage = "English" | "Hinglish" | "Hindi" | "Bengali" | "Tamil" | "Te
 type Scene = { scene: number; durationSeconds: number; narration: string; caption: string; visualPrompt: string; imageUrl?: string };
 type Storyboard = { title: string; hook: string; totalSeconds: number; scenes: Scene[]; pageName: string; language: ReelLanguage; audience: string };
 type Creative = { pageName: "Zawaago" | "InnoTech"; topic: string; caption: string; imageUrl: string };
+type ReelHistoryItem = {
+  id: string;
+  brand: "Zawaago" | "InnoTech" | "None" | "Custom";
+  topic: string;
+  title: string;
+  language: string;
+  durationSeconds: number;
+  videoUrl: string;
+  r2Key?: string;
+  thumbnailUrl?: string;
+  caption?: string;
+  status: "ready" | "scheduled" | "published" | "failed";
+  facebookVideoId?: string;
+  scheduledAt?: string;
+  createdAt: string;
+};
 
 const LOGOS: Record<"Zawaago" | "InnoTech", string> = {
   Zawaago: "/brand/zawaago-logo-final.svg",
@@ -100,6 +118,9 @@ export default function ReelComposer() {
   const [audioUrl, setAudioUrl] = useState("");
   const [scheduleAt, setScheduleAt] = useState(localDateTime(new Date(Date.now() + 3600000)));
   const [scheduled, setScheduled] = useState(false);
+  const [reelsHistory, setReelsHistory] = useState<ReelHistoryItem[]>([]);
+  const [loadingReelsHistory, setLoadingReelsHistory] = useState(false);
+  const [reelsFilter, setReelsFilter] = useState<string>("All");
   const [mp4Support, setMp4Support] = useState<boolean | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -138,6 +159,57 @@ export default function ReelComposer() {
   useEffect(() => () => {
     if (audioUrl) URL.revokeObjectURL(audioUrl);
   }, [audioUrl]);
+
+  async function loadReelsHistory(selected = reelsFilter) {
+    setLoadingReelsHistory(true);
+    try {
+      const q = selected && selected !== "All" ? `?brand=${encodeURIComponent(selected)}` : "";
+      const res = await fetch(`/api/reel-lab/history${q}`);
+      const data: any = await res.json();
+      if (res.ok && data.ok) {
+        setReelsHistory(data.reels || []);
+      }
+    } catch (e) {
+      console.warn("Could not fetch reels history:", e);
+    } finally {
+      setLoadingReelsHistory(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadReelsHistory(reelsFilter);
+  }, [reelsFilter]);
+
+  async function deleteReelHistory(item: ReelHistoryItem) {
+    if (!window.confirm(`Permanently delete reel "${item.title || "Reel"}" from D1 Database & R2 Storage?`)) return;
+    try {
+      const res = await fetch(`/api/reel-lab/history/${encodeURIComponent(item.id)}?brand=${encodeURIComponent(item.brand || "Zawaago")}`, {
+        method: "DELETE",
+      });
+      const data: any = await res.json();
+      if (res.ok && data.ok) {
+        setReelsHistory((prev) => prev.filter((r) => r.id !== item.id));
+        if (savedVideoUrl === item.videoUrl) {
+          setSavedVideoUrl("");
+        }
+      } else {
+        alert(data.error || "Could not delete reel.");
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Deletion failed");
+    }
+  }
+
+  function loadReelIntoStudio(item: ReelHistoryItem) {
+    setVideoUrl(item.videoUrl);
+    setSavedVideoUrl(item.videoUrl);
+    setVideoMime("video/mp4");
+    if (item.brand && item.brand !== "None" && item.brand !== "Custom") {
+      setBranding(item.brand as BrandName);
+    }
+    setStatus(`Loaded "${item.title}" from D1 library. Ready to preview, download or publish to Facebook.`);
+    window.scrollTo({ top: 350, behavior: "smooth" });
+  }
 
   function resetVideo() {
     setVideoUrl("");
@@ -428,8 +500,20 @@ export default function ReelComposer() {
   async function save(blob: Blob) {
     setBusy("save");
     const form = new FormData();
-    form.set("pageName", branding === "None" ? "None" : branding === "Custom" ? "Custom" : pageName);
+    const brandVal = branding === "None" ? "None" : branding === "Custom" ? "Custom" : pageName;
+    form.set("pageName", brandVal);
     form.set("caption", caption);
+    const activeTopic = (mode === "sync" ? creative?.topic || customTopic : customTopic) || "Social Media Engagement";
+    form.set("topic", activeTopic);
+    form.set("title", storyboard?.title || `${brandVal} AI Reel`);
+    form.set("language", language);
+    form.set("durationSeconds", String(storyboard?.totalSeconds || 35));
+    if (storyboard?.scenes?.[0]?.imageUrl) {
+      form.set("thumbnailUrl", storyboard.scenes[0].imageUrl);
+    }
+    if (storyboard?.scenes) {
+      form.set("scenesJson", JSON.stringify(storyboard.scenes));
+    }
     const prefix = branding === "None" ? "reel" : pageName.toLowerCase();
     form.set("file", new File([blob], `${prefix}-${Date.now()}.mp4`, { type: "video/mp4" }));
 
@@ -437,7 +521,8 @@ export default function ReelComposer() {
     const d: any = await r.json();
     if (!r.ok || !d.videoUrl) throw new Error(d.details || d.error || "Could not save Reel to R2.");
     setSavedVideoUrl(d.videoUrl);
-    setStatus("Production MP4 saved to Cloudflare R2. Ready to download, preview or publish.");
+    setStatus("Production MP4 saved to Cloudflare R2 & cataloged in D1 Database. Ready to download, preview or publish.");
+    void loadReelsHistory(reelsFilter);
   }
 
   async function saveExisting() {
@@ -469,6 +554,7 @@ export default function ReelComposer() {
       const d: any = await r.json();
       if (!r.ok || !d.ok) throw new Error(d.details || d.error || "Facebook Reel publishing failed.");
       setStatus(`Facebook Reel published successfully · video ${d.videoId}`);
+      void loadReelsHistory(reelsFilter);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -495,6 +581,7 @@ export default function ReelComposer() {
       if (!r.ok || !x.ok) throw new Error(x.details || x.error || "Facebook Reel scheduling failed.");
       setScheduled(true);
       setStatus(`Reel scheduled for ${d.toLocaleString()} · ${pageName}.`);
+      void loadReelsHistory(reelsFilter);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -922,6 +1009,125 @@ export default function ReelComposer() {
           <CalendarCheck size={17} /> Queued successfully. Check Schedule tab for publishing status.
         </div>
       )}
+
+      {/* Cloudflare D1 Reels Archive Shelf */}
+      <div className="reel-d1-shelf" id="d1-reels-archive">
+        <div className="reel-d1-head">
+          <div className="reel-d1-title">
+            <HardDrives size={20} className="text-[#171717]" />
+            <h3>Cloudflare D1 Reels Archive</h3>
+            <span className="reel-d1-badge">D1 SQL + R2 Synced ({reelsHistory.length})</span>
+          </div>
+
+          <div className="reel-d1-filter-row">
+            {(["All", "Zawaago", "InnoTech"] as const).map((filterName) => (
+              <button
+                key={filterName}
+                type="button"
+                className={`reel-d1-filter-btn ${reelsFilter === filterName ? "active" : ""}`}
+                onClick={() => setReelsFilter(filterName)}
+              >
+                {filterName}
+              </button>
+            ))}
+            <button
+              type="button"
+              className="reel-d1-filter-btn"
+              onClick={() => void loadReelsHistory(reelsFilter)}
+              disabled={loadingReelsHistory}
+              title="Refresh Reels from D1 Database"
+            >
+              <ArrowClockwise size={13} className={loadingReelsHistory ? "spin" : ""} />
+            </button>
+          </div>
+        </div>
+
+        {loadingReelsHistory ? (
+          <div style={{ padding: "40px 0", textAlign: "center", color: "#888", fontSize: "13px" }}>
+            <SpinnerGap size={24} className="spin" style={{ margin: "0 auto 8px" }} />
+            Loading cataloged reels from D1…
+          </div>
+        ) : reelsHistory.length === 0 ? (
+          <div style={{ padding: "40px 20px", textAlign: "center", color: "#888", fontSize: "13px" }}>
+            <FilmStrip size={36} style={{ margin: "0 auto 8px", opacity: 0.4 }} />
+            <strong>No Reels cataloged yet in D1</strong>
+            <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#999" }}>
+              Generate or save a Reel above and it will be stored in Cloudflare R2 and indexed in SQLite D1.
+            </p>
+          </div>
+        ) : (
+          <div className="reel-d1-grid">
+            {reelsHistory.map((item) => (
+              <div key={item.id} className="reel-card-item">
+                <div className="reel-card-preview">
+                  {item.thumbnailUrl ? (
+                    <img src={item.thumbnailUrl} alt={item.title} loading="lazy" />
+                  ) : item.videoUrl ? (
+                    <video src={item.videoUrl} preload="metadata" muted playsInline />
+                  ) : (
+                    <FilmStrip size={32} color="#555" />
+                  )}
+                  <span className={`reel-card-badge-status ${item.status}`}>{item.status}</span>
+                </div>
+
+                <div className="reel-card-body">
+                  <strong>{item.title || "Untitled Reel"}</strong>
+                  <div className="reel-card-meta">
+                    <span className="reel-card-pill">{item.brand}</span>
+                    <span className="reel-card-pill">{item.language || "English"}</span>
+                    <span>{item.durationSeconds || 35}s</span>
+                    <span>•</span>
+                    <span>{new Date(item.createdAt).toLocaleDateString()}</span>
+                  </div>
+                  {item.caption && (
+                    <p style={{ fontSize: "11px", color: "#666", margin: "4px 0 0", maxHeight: "34px", overflow: "hidden" }}>
+                      {item.caption}
+                    </p>
+                  )}
+
+                  <div className="reel-card-actions">
+                    <button
+                      type="button"
+                      className="reel-card-btn primary"
+                      onClick={() => loadReelIntoStudio(item)}
+                      title="Load this reel back into the studio player"
+                    >
+                      <Play size={13} /> Load
+                    </button>
+                    <a
+                      href={item.videoUrl}
+                      download={`${(item.brand || "reel").toLowerCase()}-${item.id}.mp4`}
+                      className="reel-card-btn"
+                      title="Download MP4"
+                    >
+                      ⬇ MP4
+                    </a>
+                    <button
+                      type="button"
+                      className="reel-card-btn"
+                      onClick={() => {
+                        navigator.clipboard.writeText(item.videoUrl);
+                        setStatus("Copied R2 asset URL.");
+                      }}
+                      title="Copy public R2 URL"
+                    >
+                      <Copy size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      className="reel-card-btn delete"
+                      onClick={() => void deleteReelHistory(item)}
+                      title="Delete from D1 and R2"
+                    >
+                      <Trash size={13} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </section>
   );
 }

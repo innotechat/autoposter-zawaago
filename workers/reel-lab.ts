@@ -1,8 +1,15 @@
 import { Hono } from "hono";
+import {
+  persistReelRecord,
+  listReelRecords,
+  deleteReelRecord,
+  type ReelHistoryRecord,
+} from "./reels-d1";
 
 type Env = {
   AI: Ai;
   ASSETS?: R2Bucket;
+  DB?: D1Database;
   SARVAM_API_KEY?: string;
 };
 type BrandName = "Zawaago" | "InnoTech" | "None" | "Custom";
@@ -227,8 +234,71 @@ reelLabRoutes.post("/reel-lab/assets", async (c) => {
     const saved = await c.env.ASSETS.head(key);
     if (!saved) return c.json({ error: "Reel upload could not be verified in R2." }, 502);
     const videoUrl = `${new URL(c.req.url).origin}/api/autoposter/assets/${encodeURIComponent(key)}`;
-    return c.json({ ok: true, pageName, key, videoUrl, size: file.size, contentType, etag: saved.httpEtag });
+
+    // Build structured ReelHistoryRecord for D1 & R2
+    const reelId = `reel_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+    const caption = String(form.get("caption") || "").trim();
+    const title = String(form.get("title") || "").trim() || `${pageName} AI Reel`;
+    const topic = String(form.get("topic") || "").trim() || "Social Media Engagement";
+    const language = String(form.get("language") || "English").trim();
+    const durationSeconds = Number(form.get("durationSeconds") || 35);
+    const thumbnailUrl = String(form.get("thumbnailUrl") || "").trim();
+    const scenesJson = String(form.get("scenesJson") || "").trim();
+
+    const reelRecord: ReelHistoryRecord = {
+      id: reelId,
+      brand: pageName,
+      topic,
+      title,
+      language,
+      durationSeconds,
+      videoUrl,
+      r2Key: key,
+      thumbnailUrl: thumbnailUrl || undefined,
+      caption: caption || undefined,
+      scenesJson: scenesJson || undefined,
+      status: "ready",
+      createdAt: new Date().toISOString(),
+    };
+
+    await persistReelRecord(c.env, reelRecord);
+
+    return c.json({
+      ok: true,
+      pageName,
+      key,
+      videoUrl,
+      size: file.size,
+      contentType,
+      etag: saved.httpEtag,
+      reel: reelRecord,
+    });
   } catch (error) {
     return c.json({ error: "Reel asset upload failed", details: error instanceof Error ? error.message : String(error) }, 500);
+  }
+});
+
+// GET /api/reel-lab/history - D1 Reel History with relational queries & R2 fallback
+reelLabRoutes.get("/reel-lab/history", async (c) => {
+  try {
+    const brand = c.req.query("brand");
+    const limit = Number(c.req.query("limit") || 50);
+    const reels = await listReelRecords(c.env, brand, limit);
+    return c.json({ ok: true, reels, count: reels.length });
+  } catch (error) {
+    return c.json({ error: "Failed to fetch reel history", details: error instanceof Error ? error.message : String(error) }, 500);
+  }
+});
+
+// DELETE /api/reel-lab/history/:id - Delete Reel record from D1 and purge binary from R2
+reelLabRoutes.delete("/reel-lab/history/:id", async (c) => {
+  try {
+    const id = c.req.param("id");
+    const brand = c.req.query("brand") || "Zawaago";
+    if (!id) return c.json({ error: "Reel id is required." }, 400);
+    const result = await deleteReelRecord(c.env, id, brand);
+    return c.json({ id, message: "Reel deleted from D1 and R2 storage.", ...result });
+  } catch (error) {
+    return c.json({ error: "Failed to delete reel", details: error instanceof Error ? error.message : String(error) }, 500);
   }
 });

@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { updateReelStatusByUrl } from "./reels-d1";
 
 type Env = {
   FB_TOKEN_ZAWAAGO?: string;
@@ -6,6 +7,7 @@ type Env = {
   PAGE_ID_ZAWAAGO: string;
   PAGE_ID_INNOTECH: string;
   ASSETS?: R2Bucket;
+  DB?: D1Database;
 };
 
 type BrandName = "Zawaago" | "InnoTech";
@@ -108,6 +110,11 @@ reelRoutes.post("/autoposter/reels/publish", async (c) => {
     if (!videoUrl) return c.json({ error: "Reel video URL is required." }, 400);
     await verifyR2Video(c.env, videoUrl, c.req.raw);
     const result = await publishFacebookReel(c.env, pageName, videoUrl, caption, title);
+    try {
+      await updateReelStatusByUrl(c.env, videoUrl, "published", { facebookVideoId: result.videoId });
+    } catch (e) {
+      console.warn("Could not update D1 reel status:", e);
+    }
     return c.json({ ok: true, ...result });
   } catch (error) {
     return c.json({ error: "Facebook Reel publishing failed", details: error instanceof Error ? error.message : String(error) }, 502);
