@@ -15,6 +15,7 @@ import {
   type Brief
 } from "../api";
 import { publishFacebookReel } from "../reels";
+import { synthesizeReelNarration } from "../reel-lab";
 import { renderReelInContainer } from "../reel-renderer";
 import { writeHistory, sanitizeHistoryError } from "../history";
 
@@ -371,23 +372,10 @@ async function renderAutonomousReel(plan: ReelPlan, env: any, origin: string): P
     sceneUrls.push(url);
   }
   const narration = plan.scenes.map(s => s.narration).join(" ").trim();
-  let audioBytes: Uint8Array;
-  if (plan.language === "English") {
-    const r: any = await env.AI.run("@cf/myshell-ai/melotts" as any, { prompt: narration, lang: "en" });
-    audioBytes = r instanceof ArrayBuffer ? new Uint8Array(r) : r instanceof Uint8Array ? r : r?.body instanceof ReadableStream ? new Uint8Array(await new Response(r.body).arrayBuffer()) : r?.audio ? Uint8Array.from(atob(r.audio), ch => ch.charCodeAt(0)) : new Uint8Array();
-  } else {
-    const apiKey = env.SARVAM_API_KEY?.trim();
-    if (!apiKey) throw new Error("SARVAM_API_KEY is required for autonomous Hindi/Hinglish Reel generation.");
-    if (narration.length > 2400) throw new Error("Reel narration exceeds Sarvam's 2,400 character limit.");
-    const response = await fetch("https://api.sarvam.ai/text-to-speech", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json", "api-subscription-key": apiKey }, body: JSON.stringify({ text: narration, model: "bulbul:v3", language_code: "hi-IN", speaker: "shubh", pace: 1, temperature: 0.6, speech_sample_rate: 24000 }) });
-    if (!response.ok) throw new Error(`Sarvam TTS returned HTTP ${response.status}`);
-    const data: any = await response.json();
-    if (typeof data?.audios?.[0] !== "string") throw new Error("Sarvam TTS returned no audio.");
-    audioBytes = Uint8Array.from(atob(data.audios[0]), ch => ch.charCodeAt(0));
-  }
-  if (audioBytes.length < 1000) throw new Error("Voice generation returned no usable audio.");
-  const audioKey = `generated/${safeBrand}/reels/${plan.id}-voice.${plan.language === "English" ? "mp3" : "wav"}`;
-  await env.ASSETS.put(audioKey, audioBytes, { httpMetadata: { contentType: plan.language === "English" ? "audio/mpeg" : "audio/wav" }, customMetadata: { planId: plan.id, source: "autonomous-content-engine" } });
+  const tts = await synthesizeReelNarration(env, narration, plan.language, "shubh");
+  if (tts.bytes.length < 1000) throw new Error("Voice generation returned no usable audio.");
+  const audioKey = `generated/${safeBrand}/reels/${plan.id}-voice.${tts.contentType === "audio/mpeg" ? "mp3" : "wav"}`;
+  await env.ASSETS.put(audioKey, tts.bytes, { httpMetadata: { contentType: tts.contentType }, customMetadata: { planId: plan.id, source: "autonomous-content-engine" } });
   const audioUrl = `${origin}/api/autoposter/assets/${encodeURIComponent(audioKey)}`;
   const rendered = await renderReelInContainer(env, { planId: plan.id, scenes: plan.scenes.map((s, i) => ({ imageUrl: sceneUrls[i], durationSeconds: s.durationSeconds, caption: s.captionOverlayText })), audioUrl });
   const videoKey = `generated/${safeBrand}/reels/${plan.id}.mp4`;
