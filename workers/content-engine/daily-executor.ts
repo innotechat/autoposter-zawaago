@@ -447,7 +447,7 @@ async function executeReelPlan(
     await transitionJobState(job.id, "FAILED", "QUALITY_GATE_FAILED", qualityResult.retryDirective?.reason || "Generated content failed Quality Gate.", { errorMessage: "Quality Gate failed", retryCount: job.retryCount + 1 }, env.DB);
     updatePlan(plan.id, { status: "FAILED", qualityScore: plan.qualityScore });
     if (env.DB) await updatePlanInD1(plan.id, { status: "FAILED", qualityScore: plan.qualityScore }, env.DB);
-    return { ok: false, planId: plan.id, brand: plan.brand, format: plan.format, stage: "QUALITY_GATE", status: "FAILED", caption: plan.format === "POST" ? caption : undefined, mediaUrl: plan.format === "POST" ? imageUrl : videoUrl, qualityScore: plan.qualityScore, error: qualityResult.retryDirective?.reason || "Quality Gate failed." };
+    return { ok: false, planId: plan.id, brand: plan.brand, format: "REEL", stage: "QUALITY_GATE", status: "FAILED", mediaUrl: videoUrl, qualityScore: plan.qualityScore, error: qualityResult.retryDirective?.reason || "Quality Gate failed." };
   }
 
   // Step 4: Ready State
