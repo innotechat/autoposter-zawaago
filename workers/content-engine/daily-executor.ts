@@ -12,6 +12,7 @@ import {
   postImageToFacebook,
   postToFacebook,
   storeImage,
+  generateProductionImage,
   type Brief
 } from "../api";
 import { publishFacebookReel } from "../reels";
@@ -229,144 +230,26 @@ async function executePostPlan(
 
     if (env.AI && env.ASSETS) {
       try {
-        const aiResult: any = await env.AI.run("@cf/black-forest-labs/flux-1-schnell" as any, {
-          prompt: imgPrompt,
-          steps: 8
-        });
-        const bytes = imageBytesFromResult(aiResult);
-        if (bytes && bytes.length > 1000) {
-          imageUrl = await storeImage(env, bytes, reqMock, plan.brand);
-        }
-      } catch (imgErr) {
-        console.warn("AI image generation warning:", imgErr);
-      }
-    }
-
-    if (!imageUrl) {
-      throw new Error("Post image generation failed; autonomous production does not permit placeholder assets.");
-    }
-
-    plan.generatedImageUrl = imageUrl;
-    updatePlan(plan.id, { generatedImageUrl: imageUrl });
-    if (env.DB) {
-      await updatePlanInD1(plan.id, { generatedImageUrl: imageUrl }, env.DB);
-    }
-  }
-
-  // Step 3: Quality Gate Evaluation
-  await transitionJobState(
-    job.id,
-    "QUALITY_CHECK",
-    "QUALITY_GATE",
-    "Evaluating content quality gate standards",
-    { caption, assetUrl: imageUrl },
-    env.DB
-  );
-
-  const qualityResult = evaluateContentQuality({
-    plan,
-    generatedCaption: caption,
-    generatedImageUrl: imageUrl,
-    freshnessScore: 0.95
-  });
-  plan.qualityScore = qualityResult.overallScore;
-
-  if (!qualityResult.passed && qualityResult.overallScore < 6.0) {
-    await transitionJobState(
-      job.id,
-      "QUALITY_CHECK",
-      "QUALITY_GATE_WARNING",
-      `Quality check flagged low score (${qualityResult.overallScore.toFixed(1)}/10)`,
-      {},
-      env.DB
-    );
-  }
-
-  if (!qualityResult.passed) {
-    await transitionJobState(job.id, "FAILED", "QUALITY_GATE_FAILED", qualityResult.retryDirective?.reason || "Generated content failed Quality Gate.", { errorMessage: "Quality Gate failed", retryCount: job.retryCount + 1 }, env.DB);
-    updatePlan(plan.id, { status: "FAILED", qualityScore: plan.qualityScore });
-    if (env.DB) await updatePlanInD1(plan.id, { status: "FAILED", qualityScore: plan.qualityScore }, env.DB);
-    return { ok: false, planId: plan.id, brand: plan.brand, format: plan.format, stage: "QUALITY_GATE", status: "FAILED", caption: plan.format === "POST" ? caption : undefined, mediaUrl: imageUrl, qualityScore: plan.qualityScore, error: qualityResult.retryDirective?.reason || "Quality Gate failed." };
-  }
-
-  // Step 4: Ready State
-  plan.status = "READY";
-  updatePlan(plan.id, { status: "READY", qualityScore: plan.qualityScore });
-  if (env.DB) {
-    await updatePlanInD1(plan.id, { status: "READY", qualityScore: plan.qualityScore }, env.DB);
-  }
-
-  // Step 5: Schedule or Publish Now
-  const shouldPublishImmediately =
-    options.publishNow || new Date(plan.scheduledFor).getTime() <= Date.now() + 60_000;
-
-  if (shouldPublishImmediately) {
-    return await publishPostToFacebook(plan, job, env, reqMock, caption, imageUrl);
-  } else {
-    // Schedule for configured time
-    await transitionJobState(
-      job.id,
-      "SCHEDULED",
-      "SCHEDULED",
-      `Post scheduled for ${plan.scheduledFor}`,
-      { caption, assetUrl: imageUrl },
-      env.DB
-    );
-    plan.status = "SCHEDULED";
-    updatePlan(plan.id, { status: "SCHEDULED" });
-    if (env.DB) {
-      await updatePlanInD1(plan.id, { status: "SCHEDULED" }, env.DB);
-    }
-
-    // Persist in scheduler queue
-    if (!env.ASSETS) throw new Error("R2 asset storage is required for scheduled Post publishing.");
-    {
-      try {
-        const scheduleRecord = {
-          id: plan.id,
-          pageName: plan.brand,
-          caption,
-          imageUrl,
-          withImage: Boolean(imageUrl && !imageUrl.includes("placeholder")),
-          scheduledAt: plan.scheduledFor,
-          status: "scheduled",
-          createdAt: new Date().toISOString()
-        };
-        await env.ASSETS.put(`schedules/${plan.id}.json`, JSON.stringify(scheduleRecord), {
-          httpMetadata: { contentType: "application/json" }
-        });
-      } catch (schedErr) {
-        throw new Error(`Post scheduler persistence failed: ${schedErr instanceof Error ? schedErr.message : String(schedErr)}`);
-      }
-    }
-
-    return {
-      ok: true,
-      planId: plan.id,
-      brand: plan.brand,
-      format: "POST",
-      stage: "SCHEDULED",
-      status: "SCHEDULED",
-      caption,
-      mediaUrl: imageUrl,
-      qualityScore: plan.qualityScore,
-      scheduledAt: plan.scheduledFor,
-      message: `Post successfully planned, generated, verified and scheduled for ${plan.scheduledFor}.`
+        const brief: Brief = {
+      topic: `${plan.topic} · scene ${scene.scene}`,
+      pageName: plan.brand,
+      contentType: "Educational Reel Scene",
+      tone: plan.language.toLowerCase().includes("hinglish") ? "Professional Hinglish" : "Professional English",
+      language: plan.language,
+      audience: plan.targetAudience,
+      visualStyle: "Premium Editorial Cinematic",
+      aspectRatio: "Portrait 9:16",
+      branding: "No branding",
+      logoPosition: "Bottom Right",
+      cta: "None",
+      customPrompt: `${scene.visualPrompt} Clean artwork only. No text, logos, letters, numbers, subtitles or watermarks. Designed for a vertical 9:16 educational Reel.`
     };
-  }
-}
-
-async function renderAutonomousReel(plan: ReelPlan, env: any, origin: string): Promise<string> {
-  if (!env.AI || !env.ASSETS) throw new Error("Workers AI and R2 are required for autonomous Reel generation.");
-  const safeBrand = plan.brand.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-  const sceneUrls: string[] = [];
-  for (let i = 0; i < plan.scenes.length; i++) {
-    const scene = plan.scenes[i];
-    const aiResult: any = await env.AI.run("@cf/black-forest-labs/flux-1-schnell" as any, { prompt: `${scene.visualPrompt} Clean premium artwork only. No text, letters, numbers, logos, watermarks, subtitles or UI. Vertical 9:16.`, steps: 8 });
-    const bytes = imageBytesFromResult(aiResult);
-    if (!bytes || bytes.length < 1000) throw new Error(`Scene ${i + 1} image generation returned no usable image.`);
+    const generated = await generateProductionImage(env, brief, { url: origin } as Request);
+    const bytes = await (await fetch(generated.imageUrl)).arrayBuffer();
+    if (bytes.byteLength < 1000) throw new Error(`Scene ${i + 1} generated image could not be reloaded from R2.`);
+    const imageBytes = new Uint8Array(bytes);
     const key = `generated/${safeBrand}/reels/${plan.id}-scene-${i + 1}.jpg`;
-    await env.ASSETS.put(key, bytes, { httpMetadata: { contentType: "image/jpeg", cacheControl: "public, max-age=31536000, immutable" }, customMetadata: { planId: plan.id, scene: String(i + 1), source: "autonomous-content-engine" } });
+    await env.ASSETS.put(key, imageBytes, { httpMetadata: { contentType: "image/jpeg", cacheControl: "public, max-age=31536000, immutable" }, customMetadata: { planId: plan.id, scene: String(i + 1), source: "autonomous-content-engine" } });
     const url = `${origin}/api/autoposter/assets/${encodeURIComponent(key)}`;
     plan.scenes[i].imageUrl = url;
     sceneUrls.push(url);
