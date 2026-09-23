@@ -241,10 +241,8 @@ async function executePostPlan(
       }
     }
 
-    // Fallback image if AI not available in current test/offline container
     if (!imageUrl) {
-      const safeBrand = plan.brand.toLowerCase();
-      imageUrl = `${reqMock.url}/api/autoposter/assets/generated/${safeBrand}/placeholder-${plan.id}.jpg`;
+      throw new Error("Post image generation failed; autonomous production does not permit placeholder assets.");
     }
 
     plan.generatedImageUrl = imageUrl;
@@ -561,8 +559,7 @@ async function publishPostToFacebook(
       errorMsg.includes("401") ||
       errorMsg.includes("403")
     ) {
-      console.warn("Facebook API publish notice (simulated publish record):", errorMsg);
-      fbPostId = `fb-sim-${plan.brand.toLowerCase()}-${Date.now()}`;
+      throw new Error(`Facebook Post publish failed: ${errorMsg}`);
     } else {
       throw fbErr;
     }
@@ -679,8 +676,7 @@ async function publishReelToFacebook(
       errorMsg.includes("upload failed") ||
       errorMsg.includes("fetch failed")
     ) {
-      console.warn("Facebook Reel publish notice (simulated publish record):", errorMsg);
-      fbVideoId = `fb-reel-sim-${plan.brand.toLowerCase()}-${Date.now()}`;
+      throw new Error(`Facebook Reel publish failed: ${errorMsg}`);
     } else {
       throw reelErr;
     }
