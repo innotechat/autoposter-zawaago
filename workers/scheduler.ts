@@ -52,6 +52,15 @@ schedulerRoutes.get("/autoposter/schedules", async (c) => { try { if (!c.env.ASS
 
 schedulerRoutes.delete("/autoposter/schedules/:id", async (c) => { try { const id = safeId(c.req.param("id")); const record = await read(c.env, id); if (!record) return c.json({ error: "Schedule not found." }, 404); if (record.status !== "scheduled") return c.json({ error: `Schedule is already ${record.status}.` }, 409); record.status = "cancelled"; await save(c.env, record); return c.json({ ok: true, id }); } catch (error) { return c.json({ error: "Could not cancel schedule", details: error instanceof Error ? error.message : String(error) }); } });
 
+schedulerRoutes.post("/autoposter/schedules/process-due", async (c) => {
+  try {
+    const result = await processDueSchedules(c.env);
+    return c.json({ ok: true, ...result });
+  } catch (error) {
+    return c.json({ error: "Schedule processing failed", details: error instanceof Error ? error.message : String(error) }, 500);
+  }
+});
+
 async function claimScheduledRecord(env: Env, objectKey: string, stored: R2Object, record: ScheduleRecord, now: Date) { if (!env.ASSETS) return false; const claimed: ScheduleRecord = { ...record, status: "processing", processingStartedAt: now.toISOString(), error: undefined }; const result = await env.ASSETS.put(objectKey, JSON.stringify(claimed), { onlyIf: { etagMatches: stored.etag }, httpMetadata: { contentType: "application/json", cacheControl: "no-store" } }); return !!result; }
 async function recoverStaleProcessing(env: Env, objectKey: string, stored: R2Object, record: ScheduleRecord, now: Date) { if (!env.ASSETS || record.status !== "processing" || !record.processingStartedAt) return false; const started = new Date(record.processingStartedAt).getTime(); if (!Number.isFinite(started) || now.getTime() - started < 10 * 60 * 1000) return false; const recovered: ScheduleRecord = { ...record, status: "scheduled", processingStartedAt: undefined, error: "Recovered stale scheduler claim." }; const result = await env.ASSETS.put(objectKey, JSON.stringify(recovered), { onlyIf: { etagMatches: stored.etag }, httpMetadata: { contentType: "application/json", cacheControl: "no-store" } }); return !!result; }
 

@@ -52,6 +52,7 @@ export type JobStatus =
   | "GENERATED"
   | "QUALITY_CHECK"
   | "APPROVED"
+  | "READY"
   | "RETRYING"
   | "SCHEDULED"
   | "PUBLISHING"
@@ -216,6 +217,10 @@ export interface PostPlan {
   qualityScore?: number;
   generatedCaption?: string;
   generatedImageUrl?: string;
+  facebookPostId?: string;
+  publishedAt?: string;
+  dayIndex?: number;
+  planBatchId?: string;
   updatedAt?: string;
 }
 
@@ -239,6 +244,11 @@ export interface ReelPlan {
   status: JobStatus;
   qualityScore?: number;
   generatedVideoUrl?: string;
+  facebookVideoId?: string;
+  facebookPostId?: string;
+  publishedAt?: string;
+  dayIndex?: number;
+  planBatchId?: string;
   updatedAt?: string;
 }
 
@@ -258,6 +268,10 @@ export interface StoryPlan {
   relatedPostOrReelId?: string;
   status: JobStatus;
   canPublishLive: boolean; // false until Facebook Graph Stories API access is active
+  facebookPostId?: string;
+  publishedAt?: string;
+  dayIndex?: number;
+  planBatchId?: string;
   updatedAt?: string;
 }
 
@@ -317,6 +331,8 @@ export interface ContentJob {
   assetUrl?: string;
   videoUrl?: string;
   caption?: string;
+  facebookPostId?: string;
+  publishedAt?: string;
   errorMessage?: string;
   logs: { timestamp: string; step: string; message: string }[];
   createdAt: string;

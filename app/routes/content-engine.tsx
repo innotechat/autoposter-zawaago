@@ -1,28 +1,76 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  Brain,
-  Sparkle,
-  Calendar,
-  Clock,
-  CheckCircle,
-  XCircle,
-  ArrowsClockwise,
-  Play,
-  Pause,
-  Sliders,
-  Eye,
-  FilmStrip,
+  ArrowClockwise,
+  ArrowRight,
   Article,
-  MagnifyingGlass,
-  ChartLineUp,
-  Warning,
-  ListBullets,
-  Tag,
-  ShareNetwork,
+  Brain,
+  Calendar,
+  CheckCircle,
+  Clock,
+  Copy,
   Cube,
-  Palette
+  Eye,
+  FacebookLogo,
+  FilmStrip,
+  GearSix,
+  ListBullets,
+  MagnifyingGlass,
+  Palette,
+  Pause,
+  Play,
+  ShareNetwork,
+  Sliders,
+  Sparkle,
+  SpinnerGap,
+  Tag,
+  WarningCircle,
+  X
 } from "@phosphor-icons/react";
-import "../reel-studio.css";
+import "../app.css";
+
+interface PlanItem {
+  id: string;
+  brand: string;
+  format: "POST" | "REEL" | "STORY";
+  pillar: string;
+  subPillar?: string;
+  topic: string;
+  angle: string;
+  hook: string;
+  captionBrief?: string;
+  cta: string;
+  targetAudience?: string;
+  language?: string;
+  scheduledFor: string;
+  status: string;
+  qualityScore?: number;
+  generatedCaption?: string;
+  generatedImageUrl?: string;
+  generatedVideoUrl?: string;
+  facebookPostId?: string;
+  facebookVideoId?: string;
+  publishedAt?: string;
+  dayIndex?: number;
+  planBatchId?: string;
+  creativeDirection?: {
+    visualFamily: string;
+    composition: string;
+    cameraPerspective?: string;
+    lighting?: string;
+    visualMetaphor: string;
+    promptOutput: string;
+    noTextPolicy?: boolean;
+  };
+  scenes?: {
+    sceneNumber: number;
+    durationSeconds: number;
+    narration: string;
+    captionOverlayText: string;
+    visualFamily: string;
+    visualPrompt: string;
+    imageUrl?: string;
+  }[];
+}
 
 interface BrandProfile {
   id: string;
@@ -40,49 +88,14 @@ interface BrandProfile {
     toneDescriptors: string[];
     vocabularyDo: string[];
     vocabularyDont: string[];
-    bannedClichés: string[];
   };
   visualIdentity: {
     preferredFamilies: string[];
     restrictedFamilies: string[];
-    colorPalette: { primaryHex: string; secondaryHex: string; mood: string };
     brandingDefault: string;
     logoPosition: string;
-    environmentPreference: string;
   };
   targetAudiences: { id: string; label: string; painPoints: string[] }[];
-}
-
-interface PlanItem {
-  id: string;
-  brand: string;
-  format: "POST" | "REEL" | "STORY";
-  pillar: string;
-  topic: string;
-  angle: string;
-  hook: string;
-  cta: string;
-  scheduledFor: string;
-  status: string;
-  qualityScore?: number;
-  creativeDirection?: {
-    visualFamily: string;
-    composition: string;
-    cameraPerspective: string;
-    lighting: string;
-    visualMetaphor: string;
-    promptOutput: string;
-    noTextPolicy: boolean;
-  };
-  scenes?: {
-    sceneNumber: number;
-    durationSeconds: number;
-    narration: string;
-    captionOverlayText: string;
-    visualFamily: string;
-    visualPrompt: string;
-    cameraView: string;
-  }[];
 }
 
 interface MemoryRecord {
@@ -99,39 +112,44 @@ interface MemoryRecord {
   createdAt: string;
 }
 
-interface PerformanceRec {
+interface ContentJobItem {
+  id: string;
+  planId: string;
   brand: string;
-  suggestedAction: string;
-  topic: string;
-  angle?: string;
-  recommendedVisualFamily?: string;
-  confidenceScore: number;
-  reasoning: string;
+  format: string;
+  state: string;
+  retryCount: number;
+  maxRetries: number;
+  currentStep: string;
+  facebookPostId?: string;
+  errorMessage?: string;
+  updatedAt: string;
 }
 
 export default function ContentEngineDashboard() {
-  const [activeTab, setActiveTab] = useState<"plans" | "simulation" | "brands" | "memory" | "intelligence">("plans");
+  const [activeTab, setActiveTab] = useState<"calendar" | "jobs" | "brands" | "memory" | "simulation">("calendar");
   const [automationEnabled, setAutomationEnabled] = useState(true);
   const [plans, setPlans] = useState<PlanItem[]>([]);
+  const [jobs, setJobs] = useState<ContentJobItem[]>([]);
   const [brands, setBrands] = useState<BrandProfile[]>([]);
-  const [selectedBrand, setSelectedBrand] = useState("All");
-  const [formatFilter, setFormatFilter] = useState("All");
+  const [selectedBrand, setSelectedBrand] = useState<"All" | "Zawaago" | "InnoTech">("All");
+  const [formatFilter, setFormatFilter] = useState<"All" | "POST" | "REEL">("All");
+  const [selectedDayFilter, setSelectedDayFilter] = useState<number | "All">("All");
   const [memorySearch, setMemorySearch] = useState("");
   const [memoryRecords, setMemoryRecords] = useState<MemoryRecord[]>([]);
-  const [recommendations, setRecommendations] = useState<PerformanceRec[]>([]);
   const [loading, setLoading] = useState(false);
+  const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [simulationResult, setSimulationResult] = useState<any>(null);
-  const [simulationDays, setSimulationDays] = useState(7);
+  const [simulationDays, setSimulationDays] = useState(30);
   const [selectedPlanDetail, setSelectedPlanDetail] = useState<PlanItem | null>(null);
   const [statusNotice, setStatusNotice] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
 
-  // Load initial status & data
   useEffect(() => {
     loadEngineStatus();
     loadPlans();
+    loadJobs();
     loadBrands();
     loadMemory();
-    loadIntelligence();
   }, []);
 
   async function loadEngineStatus() {
@@ -158,6 +176,18 @@ export default function ContentEngineDashboard() {
       console.error(e);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadJobs() {
+    try {
+      const res = await fetch("/api/content-engine/jobs");
+      const data: any = await res.json();
+      if (data.ok) {
+        setJobs(data.jobs || []);
+      }
+    } catch (e) {
+      console.error(e);
     }
   }
 
@@ -188,20 +218,6 @@ export default function ContentEngineDashboard() {
     }
   }
 
-  async function loadIntelligence() {
-    try {
-      const resZ = await fetch("/api/content-engine/performance?brand=Zawaago");
-      const dataZ: any = await resZ.json();
-      const resI = await fetch("/api/content-engine/performance?brand=InnoTech");
-      const dataI: any = await resI.json();
-
-      const combined = [...(dataZ.recommendations || []), ...(dataI.recommendations || [])];
-      setRecommendations(combined);
-    } catch (e) {
-      console.error(e);
-    }
-  }
-
   async function toggleAutomation() {
     try {
       const res = await fetch("/api/content-engine/automation/toggle", {
@@ -215,8 +231,8 @@ export default function ContentEngineDashboard() {
         setStatusNotice({
           type: "info",
           message: data.automationEnabled
-            ? "Autonomous scheduler resumed (12:30 PM, 1:00 PM, 6:30 PM, 7:00 PM IST active)."
-            : "Autonomous scheduler paused. Human control active."
+            ? "Autonomous scheduler resumed (Zawaago & InnoTech daily posting schedule active)."
+            : "Autonomous scheduler paused. Manual human control active."
         });
       }
     } catch (e) {
@@ -224,33 +240,131 @@ export default function ContentEngineDashboard() {
     }
   }
 
-  async function generateTodayPlan() {
-    setLoading(true);
-    setStatusNotice({ type: "info", message: "Synthesizing today's coordinated strategy across Zawaago & InnoTech…" });
+  async function generate10DayCalendar() {
+    setActionInProgress("planning-10-days");
+    setStatusNotice({
+      type: "info",
+      message: "Generating 10-day intelligent strategy across Zawaago & InnoTech with anti-repetition memory…"
+    });
     try {
-      const today = new Date().toISOString().slice(0, 10);
-      const res = await fetch("/api/content-engine/plan/generate", {
+      const res = await fetch("/api/content-engine/plan-10-days", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date: today })
+        body: JSON.stringify({ brands: ["Zawaago", "InnoTech"] })
       });
       const data: any = await res.json();
       if (data.ok) {
         setStatusNotice({
           type: "success",
-          message: `Generated today's plan (${data.plan.plans.length} items) with ${Math.round(
-            data.plan.visualDiversityScore * 100
-          )}% visual diversity.`
+          message: `Generated 10-Day Plan (${data.totalPlans} items) with ${(
+            data.overallVisualDiversityIndex * 100
+          ).toFixed(0)}% visual diversity. Persisted in D1 database.`
         });
         await loadPlans();
+        await loadJobs();
         await loadMemory();
       } else {
-        throw new Error(data.error || "Failed to generate plan");
+        throw new Error(data.error || "Failed to generate 10-day plan");
       }
     } catch (e: any) {
-      setStatusNotice({ type: "error", message: e.message || "Failed to generate plan." });
+      setStatusNotice({ type: "error", message: e.message || "Failed to generate 10-day plan." });
     } finally {
-      setLoading(false);
+      setActionInProgress(null);
+    }
+  }
+
+  async function executeTodayQueue(publishNow = true) {
+    setActionInProgress("executing-today");
+    const today = new Date().toISOString().slice(0, 10);
+    setStatusNotice({
+      type: "info",
+      message: `Running autonomous daily pipeline for ${today} (Generate → Quality Gate → Ready → Facebook Publish)…`
+    });
+    try {
+      const res = await fetch("/api/content-engine/execute-daily-queue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date: today, publishNow })
+      });
+      const data: any = await res.json();
+      if (data.ok) {
+        setStatusNotice({
+          type: "success",
+          message: `Daily queue executed: ${data.successful} processed, ${data.skipped} skipped (already published), ${data.failed} failed.`
+        });
+        await loadPlans();
+        await loadJobs();
+      } else {
+        throw new Error(data.error || "Daily queue execution failed");
+      }
+    } catch (e: any) {
+      setStatusNotice({ type: "error", message: e.message || "Execution failed." });
+    } finally {
+      setActionInProgress(null);
+    }
+  }
+
+  async function executeSingleItem(id: string, publishNow = true) {
+    setActionInProgress(`exec-${id}`);
+    setStatusNotice({
+      type: "info",
+      message: "Executing item pipeline (Generate Media → Quality Gate → Ready → Facebook Publish)…"
+    });
+    try {
+      const res = await fetch(`/api/content-engine/execute-item/${id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ publishNow })
+      });
+      const data: any = await res.json();
+      if (data.ok) {
+        setStatusNotice({
+          type: "success",
+          message: data.message || `Item pipeline completed: ${data.status}`
+        });
+        await loadPlans();
+        await loadJobs();
+        if (selectedPlanDetail?.id === id) {
+          const updated = plans.find((p) => p.id === id);
+          if (updated) setSelectedPlanDetail(updated);
+        }
+      } else {
+        throw new Error(data.error || "Execution failed");
+      }
+    } catch (e: any) {
+      setStatusNotice({ type: "error", message: e.message || "Item execution failed." });
+    } finally {
+      setActionInProgress(null);
+    }
+  }
+
+  async function retryJob(id: string) {
+    setActionInProgress(`retry-${id}`);
+    setStatusNotice({
+      type: "info",
+      message: "Safely retrying job from uncompleted stage without duplicate publishing…"
+    });
+    try {
+      const res = await fetch(`/api/content-engine/retry-job/${id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ publishNow: true })
+      });
+      const data: any = await res.json();
+      if (data.ok) {
+        setStatusNotice({
+          type: "success",
+          message: data.message || "Job retry completed successfully."
+        });
+        await loadPlans();
+        await loadJobs();
+      } else {
+        throw new Error(data.error || "Retry failed");
+      }
+    } catch (e: any) {
+      setStatusNotice({ type: "error", message: e.message || "Retry failed." });
+    } finally {
+      setActionInProgress(null);
     }
   }
 
@@ -268,7 +382,7 @@ export default function ContentEngineDashboard() {
         setSimulationResult(data);
         setStatusNotice({
           type: "success",
-          message: `Simulation complete: ${data.totalPlansGenerated} plans simulated with 0 repetition violations.`
+          message: `Simulation complete: ${data.totalPlansGenerated} plans simulated across 30 days with 0 repetition violations.`
         });
       } else {
         throw new Error(data.error || "Simulation failed");
@@ -280,563 +394,620 @@ export default function ContentEngineDashboard() {
     }
   }
 
-  async function approvePlan(id: string) {
-    try {
-      const res = await fetch(`/api/content-engine/plans/${id}/approve`, { method: "POST" });
-      const data: any = await res.json();
-      if (data.ok) {
-        setStatusNotice({ type: "success", message: "Plan approved for execution." });
-        loadPlans();
-        if (selectedPlanDetail?.id === id) {
-          setSelectedPlanDetail(data.plan);
-        }
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }
+  // Filter plans
+  const filteredPlans = useMemo(() => {
+    return plans.filter((p) => {
+      if (selectedBrand !== "All" && p.brand.toLowerCase() !== selectedBrand.toLowerCase()) return false;
+      if (formatFilter !== "All" && p.format !== formatFilter) return false;
+      if (selectedDayFilter !== "All" && p.dayIndex !== selectedDayFilter) return false;
+      return true;
+    });
+  }, [plans, selectedBrand, formatFilter, selectedDayFilter]);
 
-  async function triggerRegeneration(id: string, target: "ALL" | "CAPTION_ONLY" | "IMAGE_ONLY" | "SCENE_ONLY") {
-    try {
-      const res = await fetch(`/api/content-engine/plans/${id}/regenerate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target })
-      });
-      const data: any = await res.json();
-      if (data.ok) {
-        setStatusNotice({ type: "info", message: `Targeted regeneration queued: ${target}` });
-        loadPlans();
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }
-
-  const filteredPlans = plans.filter((p) => {
-    if (selectedBrand !== "All" && p.brand.toLowerCase() !== selectedBrand.toLowerCase()) return false;
-    if (formatFilter !== "All" && p.format !== formatFilter) return false;
-    return true;
-  });
+  // Statistics
+  const stats = useMemo(() => {
+    const published = plans.filter((p) => p.status === "PUBLISHED").length;
+    const scheduled = plans.filter((p) => p.status === "SCHEDULED").length;
+    const ready = plans.filter((p) => p.status === "READY" || p.status === "APPROVED").length;
+    const failed = plans.filter((p) => p.status === "FAILED").length;
+    const total = plans.length;
+    return { published, scheduled, ready, failed, total };
+  }, [plans]);
 
   return (
-    <main className="min-h-screen bg-[#faf8f5] text-[#1e2022] font-sans antialiased">
-      {/* Top Studio Bar */}
-      <header className="sticky top-0 z-30 border-b border-[#e5e0d8] bg-white/95 backdrop-blur-md px-6 py-3.5">
-        <div className="mx-auto flex max-w-[1440px] items-center justify-between">
-          <div className="flex items-center gap-3.5">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#1b2a4a] to-[#0f172a] text-white shadow-sm">
-              <Brain size={22} weight="fill" />
-            </div>
+    <div className="autoposter-shell min-h-screen text-[#171717]">
+      <div className="mx-auto max-w-[1440px] px-4 py-4 sm:px-6">
+        {/* Studio Header */}
+        <header className="studio-header">
+          <div className="flex items-center gap-3">
+            <div className="brand-mark bg-[#171717]">🧠</div>
             <div>
-              <div className="flex items-center gap-2.5">
-                <h1 className="text-[19px] font-bold tracking-tight text-[#0f172a]">Content Intelligence Engine</h1>
-                <span
-                  className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                    automationEnabled ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-amber-50 text-amber-700 border border-amber-200"
-                  }`}
-                >
-                  <span className={`h-1.5 w-1.5 rounded-full ${automationEnabled ? "bg-emerald-500 animate-pulse" : "bg-amber-500"}`} />
-                  {automationEnabled ? "Autonomous Loop Active" : "Automation Paused"}
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-[15px] tracking-tight text-[#171717]">Content Brain OS</span>
+                <span className="status-pill">
+                  <span className={`live-dot ${automationEnabled ? "bg-[#1b9b6d]" : "bg-[#a09f9a]"}`} />
+                  {automationEnabled ? "Autonomous Active" : "Paused (Human Mode)"}
                 </span>
               </div>
-              <p className="text-xs text-[#64748b]">
-                Brand Brain • Visual Diversity Engine • State Machine & Quality Gate
+              <p className="m-0 text-[11px] text-[#888782]">
+                10-Day Intelligent Content Strategy & Autonomous Daily Execution
               </p>
             </div>
           </div>
 
-          {/* Quick Nav Links */}
           <div className="flex items-center gap-2">
-            <a
-              href="/"
-              className="rounded-lg border border-[#e2e8f0] px-3 py-1.5 text-xs font-semibold text-[#475569] hover:bg-[#f1f5f9] transition"
-            >
-              Classic Studio
+            <a href="/autoposter" className="icon-button text-[11px] font-semibold no-underline">
+              <span>Main Studio</span>
             </a>
-            <a
-              href="/schedule"
-              className="rounded-lg border border-[#e2e8f0] px-3 py-1.5 text-xs font-semibold text-[#475569] hover:bg-[#f1f5f9] transition"
-            >
-              Calendar
+            <a href="/reels" className="icon-button text-[11px] font-semibold no-underline">
+              <span>Reel Studio</span>
             </a>
-            <a
-              href="/history"
-              className="rounded-lg border border-[#e2e8f0] px-3 py-1.5 text-xs font-semibold text-[#475569] hover:bg-[#f1f5f9] transition"
-            >
-              History
+            <a href="/schedule" className="icon-button text-[11px] font-semibold no-underline">
+              <span>Schedules</span>
             </a>
-
             <button
               onClick={toggleAutomation}
-              className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition shadow-sm ${
-                automationEnabled
-                  ? "bg-amber-100 text-amber-900 hover:bg-amber-200"
-                  : "bg-emerald-600 text-white hover:bg-emerald-700"
-              }`}
+              className="icon-button text-[11px] font-semibold"
+              title="Toggle Autonomous Engine"
             >
               {automationEnabled ? <Pause size={14} weight="bold" /> : <Play size={14} weight="bold" />}
-              {automationEnabled ? "Pause Engine" : "Resume Engine"}
+              <span>{automationEnabled ? "Pause Engine" : "Resume Engine"}</span>
+            </button>
+          </div>
+        </header>
+
+        {/* Hero Strip */}
+        <section className="hero-strip my-4">
+          <div>
+            <div className="eyebrow">
+              <Sparkle size={12} weight="fill" />
+              <span>PREMIUM AI CONTENT OPERATING SYSTEM</span>
+            </div>
+            <h2>10-Day Strategy & Daily Autonomous Execution</h2>
+            <p>
+              Coordinated cross-brand calendar for Zawaago & InnoTech: 12:30 PM & 1:00 PM Posts, 6:30 PM & 7:00 PM Reels.
+              Media generation, Quality Gate verification, R2 asset storage, and safe Facebook publishing.
+            </p>
+          </div>
+          <div className="hidden lg:flex items-center gap-8 pr-4">
+            <div className="hero-stat flex items-center">
+              <span>{stats.total}</span>
+              <small>Total<br />Plans</small>
+            </div>
+            <div className="hero-stat flex items-center">
+              <span>{stats.published}</span>
+              <small>Live on<br />Facebook</small>
+            </div>
+            <div className="hero-stat flex items-center">
+              <span>{stats.ready}</span>
+              <small>Ready<br />Queue</small>
+            </div>
+          </div>
+        </section>
+
+        {/* Status Notice */}
+        {statusNotice && (
+          <div
+            className={`status-banner mb-4 ${
+              statusNotice.type === "success"
+                ? "success"
+                : statusNotice.type === "error"
+                ? "error"
+                : "bg-white border-[#d9d8d4] text-[#333]"
+            }`}
+          >
+            {statusNotice.type === "success" ? (
+              <CheckCircle size={16} weight="fill" />
+            ) : statusNotice.type === "error" ? (
+              <WarningCircle size={16} weight="fill" />
+            ) : (
+              <Sparkle size={16} weight="fill" />
+            )}
+            <span className="font-medium">{statusNotice.message}</span>
+            <button
+              onClick={() => setStatusNotice(null)}
+              className="ml-auto border-0 bg-transparent text-current opacity-60 hover:opacity-100 p-1"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
+        {/* Navigation Tabs */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e5e4df] pb-3 mb-5">
+          <div className="preview-tabs m-0">
+            <button
+              className={activeTab === "calendar" ? "active" : ""}
+              onClick={() => setActiveTab("calendar")}
+            >
+              <Calendar size={14} />
+              <span>10-Day Calendar & Queue</span>
+            </button>
+            <button
+              className={activeTab === "jobs" ? "active" : ""}
+              onClick={() => setActiveTab("jobs")}
+            >
+              <Clock size={14} />
+              <span>State Machine Jobs ({jobs.length})</span>
+            </button>
+            <button
+              className={activeTab === "brands" ? "active" : ""}
+              onClick={() => setActiveTab("brands")}
+            >
+              <Sliders size={14} />
+              <span>Brand Brain</span>
+            </button>
+            <button
+              className={activeTab === "memory" ? "active" : ""}
+              onClick={() => setActiveTab("memory")}
+            >
+              <Brain size={14} />
+              <span>Content Memory ({memoryRecords.length})</span>
+            </button>
+            <button
+              className={activeTab === "simulation" ? "active" : ""}
+              onClick={() => setActiveTab("simulation")}
+            >
+              <Sparkle size={14} />
+              <span>30-Day Simulation</span>
+            </button>
+          </div>
+
+          {/* Primary Action Buttons */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={generate10DayCalendar}
+              disabled={actionInProgress !== null}
+              className="publish-primary !min-h-[38px] px-4 text-[11px] font-bold inline-flex items-center gap-2 cursor-pointer"
+            >
+              {actionInProgress === "planning-10-days" ? (
+                <SpinnerGap size={14} className="animate-spin" />
+              ) : (
+                <Calendar size={14} />
+              )}
+              <span>Generate 10-Day Plan</span>
             </button>
 
             <button
-              onClick={generateTodayPlan}
-              disabled={loading}
-              className="flex items-center gap-1.5 rounded-lg bg-[#0f172a] px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-[#1e293b] transition disabled:opacity-50"
+              onClick={() => executeTodayQueue(true)}
+              disabled={actionInProgress !== null}
+              className="publish-secondary !min-h-[38px] px-4 text-[11px] font-bold inline-flex items-center gap-2 cursor-pointer"
             >
-              <Sparkle size={14} weight="fill" />
-              Plan Today's Output
+              {actionInProgress === "executing-today" ? (
+                <SpinnerGap size={14} className="animate-spin" />
+              ) : (
+                <Play size={14} weight="fill" />
+              )}
+              <span>Execute Today's Queue</span>
             </button>
           </div>
         </div>
-      </header>
 
-      {/* Schedule Policy Banner */}
-      <div className="border-b border-[#ece6dc] bg-[#f4efe6] px-6 py-2">
-        <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between text-xs text-[#525252]">
-          <div className="flex items-center gap-4">
-            <span className="font-semibold text-[#171717] flex items-center gap-1">
-              <Clock size={14} weight="bold" /> Operating Schedule (IST):
-            </span>
-            <span className="rounded bg-white/80 px-2 py-0.5 font-medium text-[#1e293b] border border-black/5">
-              12:30 PM — Zawaago Post
-            </span>
-            <span className="rounded bg-white/80 px-2 py-0.5 font-medium text-[#1e293b] border border-black/5">
-              1:00 PM — InnoTech Post
-            </span>
-            <span className="rounded bg-white/80 px-2 py-0.5 font-medium text-[#1e293b] border border-black/5">
-              6:30 PM — Zawaago Reel
-            </span>
-            <span className="rounded bg-white/80 px-2 py-0.5 font-medium text-[#1e293b] border border-black/5">
-              7:00 PM — InnoTech Reel
-            </span>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <span className="text-[#64748b]">Visual Diversity Engine: Active (16 Art Families)</span>
-            <span className="text-[#64748b]">D1 State Machine: Online</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Toast Notice */}
-      {statusNotice && (
-        <div
-          className={`mx-auto mt-3 max-w-[1440px] px-6 py-2.5 rounded-xl border text-xs font-medium flex items-center justify-between ${
-            statusNotice.type === "success"
-              ? "bg-emerald-50 border-emerald-200 text-emerald-800"
-              : statusNotice.type === "error"
-              ? "bg-rose-50 border-rose-200 text-rose-800"
-              : "bg-blue-50 border-blue-200 text-blue-800"
-          }`}
-        >
-          <span>{statusNotice.message}</span>
-          <button onClick={() => setStatusNotice(null)} className="opacity-70 hover:opacity-100">
-            ✕
-          </button>
-        </div>
-      )}
-
-      {/* Main Container */}
-      <div className="mx-auto max-w-[1440px] px-6 py-6">
-        {/* Navigation Tabs */}
-        <div className="mb-6 flex border-b border-[#e2e8f0]">
-          <button
-            onClick={() => setActiveTab("plans")}
-            className={`flex items-center gap-2 border-b-2 px-5 py-3 text-sm font-semibold transition ${
-              activeTab === "plans"
-                ? "border-[#0f172a] text-[#0f172a]"
-                : "border-transparent text-[#64748b] hover:text-[#0f172a]"
-            }`}
-          >
-            <Article size={18} />
-            Coordinated Content Plans
-            <span className="ml-1 rounded-full bg-[#f1f5f9] px-2 py-0.5 text-xs text-[#475569]">
-              {plans.length}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab("simulation")}
-            className={`flex items-center gap-2 border-b-2 px-5 py-3 text-sm font-semibold transition ${
-              activeTab === "simulation"
-                ? "border-[#0f172a] text-[#0f172a]"
-                : "border-transparent text-[#64748b] hover:text-[#0f172a]"
-            }`}
-          >
-            <ArrowsClockwise size={18} />
-            Autonomous Simulation (Dry-Run)
-          </button>
-
-          <button
-            onClick={() => setActiveTab("brands")}
-            className={`flex items-center gap-2 border-b-2 px-5 py-3 text-sm font-semibold transition ${
-              activeTab === "brands"
-                ? "border-[#0f172a] text-[#0f172a]"
-                : "border-transparent text-[#64748b] hover:text-[#0f172a]"
-            }`}
-          >
-            <Brain size={18} />
-            Brand Brain Registry
-            <span className="ml-1 rounded-full bg-[#f1f5f9] px-2 py-0.5 text-xs text-[#475569]">
-              {brands.length}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab("memory")}
-            className={`flex items-center gap-2 border-b-2 px-5 py-3 text-sm font-semibold transition ${
-              activeTab === "memory"
-                ? "border-[#0f172a] text-[#0f172a]"
-                : "border-transparent text-[#64748b] hover:text-[#0f172a]"
-            }`}
-          >
-            <Cube size={18} />
-            Content Memory & Anti-Repetition
-          </button>
-
-          <button
-            onClick={() => setActiveTab("intelligence")}
-            className={`flex items-center gap-2 border-b-2 px-5 py-3 text-sm font-semibold transition ${
-              activeTab === "intelligence"
-                ? "border-[#0f172a] text-[#0f172a]"
-                : "border-transparent text-[#64748b] hover:text-[#0f172a]"
-            }`}
-          >
-            <ChartLineUp size={18} />
-            Performance Intelligence
-          </button>
-        </div>
-
-        {/* TAB 1: CO-ORDINATED PLANS */}
-        {activeTab === "plans" && (
-          <div>
-            {/* Filter Bar */}
-            <div className="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-[#e2e8f0] bg-white p-4 shadow-sm">
-              <div className="flex items-center gap-4">
-                <div>
-                  <label className="text-xs font-semibold text-[#64748b]">Brand:</label>
-                  <select
-                    value={selectedBrand}
-                    onChange={(e) => setSelectedBrand(e.target.value)}
-                    className="ml-2 rounded-lg border border-[#cbd5e1] bg-white px-3 py-1.5 text-xs font-medium text-[#1e293b]"
-                  >
-                    <option value="All">All Brands</option>
-                    <option value="Zawaago">Zawaago</option>
-                    <option value="InnoTech">InnoTech</option>
-                  </select>
+        {/* TAB 1: 10-Day Calendar & Queue */}
+        {activeTab === "calendar" && (
+          <div className="space-y-4">
+            {/* Autonomous Workflow Pipeline Bar */}
+            <div className="panel p-4 bg-white/80 border border-[#deddd9] rounded-xl">
+              <div className="text-[11px] font-bold text-[#666] mb-2 uppercase tracking-wider">
+                Autonomous Execution Pipeline
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 text-center text-[10px]">
+                <div className="p-2 rounded-lg bg-[#f0efec] border border-[#deddd9] font-medium">
+                  <span className="block font-bold text-[#171717]">1. 10-Day Strategy</span>
+                  <span className="text-[#888]">Brand Brain & Topics</span>
                 </div>
-
-                <div>
-                  <label className="text-xs font-semibold text-[#64748b]">Format:</label>
-                  <select
-                    value={formatFilter}
-                    onChange={(e) => setFormatFilter(e.target.value)}
-                    className="ml-2 rounded-lg border border-[#cbd5e1] bg-white px-3 py-1.5 text-xs font-medium text-[#1e293b]"
-                  >
-                    <option value="All">All Formats</option>
-                    <option value="POST">Post (Square / 4:5)</option>
-                    <option value="REEL">Reel (9:16 Faceless)</option>
-                    <option value="STORY">Story (9:16)</option>
-                  </select>
+                <div className="p-2 rounded-lg bg-[#f0efec] border border-[#deddd9] font-medium">
+                  <span className="block font-bold text-[#171717]">2. Today's Queue</span>
+                  <span className="text-[#888]">Day-by-Day Fetch</span>
+                </div>
+                <div className="p-2 rounded-lg bg-[#f0efec] border border-[#deddd9] font-medium">
+                  <span className="block font-bold text-[#171717]">3. AI Generation</span>
+                  <span className="text-[#888]">Caption & Flux Visuals</span>
+                </div>
+                <div className="p-2 rounded-lg bg-[#f0efec] border border-[#deddd9] font-medium">
+                  <span className="block font-bold text-[#171717]">4. Quality Gate</span>
+                  <span className="text-[#888]">Hook & Narrative Score</span>
+                </div>
+                <div className="p-2 rounded-lg bg-[#f0efec] border border-[#deddd9] font-medium">
+                  <span className="block font-bold text-[#171717]">5. R2 Storage</span>
+                  <span className="text-[#888]">Immutable Assets</span>
+                </div>
+                <div className="p-2 rounded-lg bg-[#f0efec] border border-[#deddd9] font-medium">
+                  <span className="block font-bold text-[#171717]">6. Scheduled Time</span>
+                  <span className="text-[#888]">12:30 / 1:00 / 6:30 / 7:00</span>
+                </div>
+                <div className="p-2 rounded-lg bg-[#edf8f3] border border-[#bce2d0] text-[#1b7a54] font-medium">
+                  <span className="block font-bold">7. Facebook Publish</span>
+                  <span className="text-[#2b8a64]">Feed & Reels API</span>
                 </div>
               </div>
+            </div>
 
+            {/* Filter Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-white/70 p-3 rounded-xl border border-[#deddd9]">
+              {/* Day Filter Pills */}
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="text-[11px] font-bold text-[#666] mr-1">Day:</span>
+                <button
+                  onClick={() => setSelectedDayFilter("All")}
+                  className={`px-2.5 py-1 text-[11px] font-semibold rounded-md border transition ${
+                    selectedDayFilter === "All"
+                      ? "bg-[#171717] text-white border-[#171717]"
+                      : "bg-white text-[#555] border-[#deddd9] hover:bg-[#f6f5f2]"
+                  }`}
+                >
+                  All (10 Days)
+                </button>
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => setSelectedDayFilter(d)}
+                    className={`px-2 py-1 text-[11px] font-semibold rounded-md border transition ${
+                      selectedDayFilter === d
+                        ? "bg-[#171717] text-white border-[#171717]"
+                        : "bg-white text-[#555] border-[#deddd9] hover:bg-[#f6f5f2]"
+                    }`}
+                  >
+                    Day {d}
+                  </button>
+                ))}
+              </div>
+
+              {/* Brand & Format Filters */}
               <div className="flex items-center gap-2">
+                <select
+                  value={selectedBrand}
+                  onChange={(e) => setSelectedBrand(e.target.value as any)}
+                  className="min-h-[32px] px-2.5 text-[11px] rounded-lg border border-[#deddd9] bg-white font-medium text-[#333]"
+                >
+                  <option value="All">All Brands</option>
+                  <option value="Zawaago">Zawaago</option>
+                  <option value="InnoTech">InnoTech</option>
+                </select>
+
+                <select
+                  value={formatFilter}
+                  onChange={(e) => setFormatFilter(e.target.value as any)}
+                  className="min-h-[32px] px-2.5 text-[11px] rounded-lg border border-[#deddd9] bg-white font-medium text-[#333]"
+                >
+                  <option value="All">All Formats</option>
+                  <option value="POST">Posts (12:30 / 1:00 PM IST)</option>
+                  <option value="REEL">Reels (6:30 / 7:00 PM IST)</option>
+                </select>
+
                 <button
                   onClick={loadPlans}
-                  className="flex items-center gap-1 rounded-lg border border-[#e2e8f0] bg-[#f8fafc] px-3 py-1.5 text-xs font-semibold text-[#475569] hover:bg-[#f1f5f9]"
+                  className="icon-button !min-h-[32px] text-[11px] font-semibold"
+                  title="Refresh plans from D1"
                 >
-                  <ArrowsClockwise size={14} /> Refresh
+                  <ArrowClockwise size={13} className={loading ? "animate-spin" : ""} />
+                  <span>Refresh</span>
                 </button>
               </div>
             </div>
 
-            {/* Plans List */}
+            {/* Plans List Grid */}
             {filteredPlans.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-[#cbd5e1] bg-white p-12 text-center">
-                <Brain size={40} className="mx-auto mb-3 text-[#94a3b8]" />
-                <h3 className="text-base font-semibold text-[#0f172a]">No content plans generated yet</h3>
-                <p className="mt-1 text-xs text-[#64748b] max-w-md mx-auto">
-                  Click "Plan Today's Output" above to formulate coordinated 12:30 PM, 1:00 PM, 6:30 PM, and 7:00 PM
-                  posts and reels based on the Brand Brain.
+              <div className="panel p-12 text-center">
+                <Calendar size={36} className="mx-auto text-[#aaa8a1] mb-2" />
+                <h4 className="text-[15px] font-bold text-[#333] m-0 mb-1">No Content Plans Found</h4>
+                <p className="text-[12px] text-[#888] max-w-[460px] mx-auto mb-4">
+                  Click "Generate 10-Day Plan" above to create 40 coordinated daily releases for Zawaago & InnoTech,
+                  persisted in your D1 database.
                 </p>
                 <button
-                  onClick={generateTodayPlan}
-                  disabled={loading}
-                  className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#0f172a] px-4 py-2 text-xs font-semibold text-white shadow hover:bg-[#1e293b]"
+                  onClick={generate10DayCalendar}
+                  disabled={actionInProgress !== null}
+                  className="publish-primary !min-h-[38px] px-5 text-[12px] font-bold inline-flex items-center gap-2 cursor-pointer mx-auto"
                 >
-                  <Sparkle size={16} weight="fill" /> Plan Today's Content
+                  <Calendar size={14} />
+                  <span>Generate 10-Day Intelligent Plan Now</span>
                 </button>
               </div>
             ) : (
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {filteredPlans.map((plan) => (
-                  <div
-                    key={plan.id}
-                    className="flex flex-col justify-between rounded-2xl border border-[#e2e8f0] bg-white p-5 shadow-sm transition hover:shadow-md"
-                  >
-                    <div>
-                      <div className="mb-3 flex items-center justify-between">
-                        <span
-                          className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-bold ${
-                            plan.brand === "InnoTech"
-                              ? "bg-amber-50 text-amber-800 border border-amber-200"
-                              : "bg-blue-50 text-blue-800 border border-blue-200"
-                          }`}
-                        >
-                          {plan.brand}
-                        </span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {filteredPlans.map((plan) => {
+                  const isZawaago = plan.brand.toLowerCase().includes("zawaago");
+                  const isPost = plan.format === "POST";
+                  const scheduleTimeStr = plan.scheduledFor
+                    ? new Date(plan.scheduledFor).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                    : "";
+                  const scheduleDateStr = plan.scheduledFor ? plan.scheduledFor.slice(0, 10) : "";
 
-                        <span
-                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
-                            plan.format === "REEL"
-                              ? "bg-purple-50 text-purple-700 border border-purple-200"
-                              : "bg-slate-100 text-slate-700"
-                          }`}
-                        >
-                          {plan.format === "REEL" ? <FilmStrip size={13} /> : <Article size={13} />}
-                          {plan.format}
-                        </span>
-                      </div>
-
-                      <h4 className="text-sm font-bold text-[#0f172a] line-clamp-2">{plan.topic}</h4>
-
-                      <div className="mt-2.5 space-y-1 text-xs text-[#475569]">
-                        <p>
-                          <span className="font-semibold text-[#0f172a]">Angle:</span> {plan.angle}
-                        </p>
-                        <p>
-                          <span className="font-semibold text-[#0f172a]">Hook:</span> "{plan.hook}"
-                        </p>
-                        {plan.creativeDirection && (
-                          <p>
-                            <span className="font-semibold text-[#0f172a]">Visual Style:</span>{" "}
-                            <span className="rounded bg-[#f1f5f9] px-1.5 py-0.5 text-[11px] font-medium text-[#334155]">
-                              {plan.creativeDirection.visualFamily}
-                            </span>
-                          </p>
-                        )}
-                        <p className="flex items-center gap-1 text-[#64748b]">
-                          <Clock size={12} /> Scheduled: {plan.scheduledFor.slice(11, 16)} IST
-                        </p>
-                      </div>
-
-                      {/* Quality Score Indicator */}
-                      <div className="mt-4 flex items-center justify-between rounded-lg bg-[#f8fafc] px-3 py-2 border border-[#e2e8f0]">
-                        <span className="text-xs font-medium text-[#64748b]">Quality Gate</span>
-                        <div className="flex items-center gap-1.5">
-                          <CheckCircle size={15} weight="fill" className="text-emerald-600" />
-                          <span className="text-xs font-bold text-[#0f172a]">
-                            {plan.qualityScore ? `${plan.qualityScore}/10` : "Verified"}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Actions */}
-                    <div className="mt-4 pt-3 border-t border-[#f1f5f9] flex items-center justify-between">
-                      <button
-                        onClick={() => setSelectedPlanDetail(plan)}
-                        className="text-xs font-semibold text-[#0f172a] hover:underline flex items-center gap-1"
-                      >
-                        <Eye size={14} /> Full Details
-                      </button>
-
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          onClick={() => triggerRegeneration(plan.id, "IMAGE_ONLY")}
-                          title="Regenerate Visual Only"
-                          className="rounded p-1.5 text-xs text-[#64748b] hover:bg-[#f1f5f9] hover:text-[#0f172a]"
-                        >
-                          <Palette size={15} />
-                        </button>
-                        {plan.status !== "APPROVED" && (
-                          <button
-                            onClick={() => approvePlan(plan.id)}
-                            className="rounded-lg bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-700 shadow-sm"
-                          >
-                            Approve
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* TAB 2: AUTONOMOUS SIMULATION (DRY-RUN) */}
-        {activeTab === "simulation" && (
-          <div className="space-y-6">
-            <div className="rounded-2xl border border-[#e2e8f0] bg-white p-6 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <h3 className="text-base font-bold text-[#0f172a]">Multi-Day Strategy Simulation (Dry-Run)</h3>
-                  <p className="mt-1 text-xs text-[#64748b] max-w-2xl">
-                    Run an autonomous simulation across 7 to 30 days to test continuous topic-angle rotation, visual
-                    diversity indices, and guarantee 0 repetition conflicts before scheduling.
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <label className="text-xs font-semibold text-[#64748b]">Horizon:</label>
-                    <select
-                      value={simulationDays}
-                      onChange={(e) => setSimulationDays(Number(e.target.value))}
-                      className="rounded-lg border border-[#cbd5e1] px-3 py-1.5 text-xs font-medium"
+                  return (
+                    <div
+                      key={plan.id}
+                      className="panel p-4 bg-white border border-[#deddd9] rounded-xl flex flex-col justify-between hover:border-[#bdbbb5] transition shadow-sm"
                     >
-                      <option value={7}>7 Days (28 Posts/Reels)</option>
-                      <option value={14}>14 Days (56 Posts/Reels)</option>
-                      <option value={30}>30 Days (120 Posts/Reels)</option>
-                    </select>
-                  </div>
-
-                  <button
-                    onClick={runSimulation}
-                    disabled={loading}
-                    className="flex items-center gap-2 rounded-lg bg-[#0f172a] px-4 py-2 text-xs font-semibold text-white shadow hover:bg-[#1e293b] disabled:opacity-50"
-                  >
-                    <Play size={14} weight="fill" /> Run Dry-Run Simulation
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {simulationResult && (
-              <div className="rounded-2xl border border-[#e2e8f0] bg-white p-6 shadow-sm space-y-6">
-                {/* Metric Summary Cards */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="rounded-xl bg-[#f8fafc] p-4 border border-[#e2e8f0]">
-                    <span className="text-xs text-[#64748b]">Simulated Plans</span>
-                    <p className="mt-1 text-2xl font-bold text-[#0f172a]">{simulationResult.totalPlansGenerated}</p>
-                    <span className="text-[11px] text-[#64748b]">Across {simulationResult.daysCount} days</span>
-                  </div>
-
-                  <div className="rounded-xl bg-[#f8fafc] p-4 border border-[#e2e8f0]">
-                    <span className="text-xs text-[#64748b]">Visual Diversity Index</span>
-                    <p className="mt-1 text-2xl font-bold text-emerald-600">
-                      {Math.round(simulationResult.overallVisualDiversityIndex * 100)}%
-                    </p>
-                    <span className="text-[11px] text-emerald-700">Excellent rotational distribution</span>
-                  </div>
-
-                  <div className="rounded-xl bg-[#f8fafc] p-4 border border-[#e2e8f0]">
-                    <span className="text-xs text-[#64748b]">Repetition Violations</span>
-                    <p className="mt-1 text-2xl font-bold text-emerald-600">0</p>
-                    <span className="text-[11px] text-[#64748b]">100% compliant anti-repetition rules</span>
-                  </div>
-
-                  <div className="rounded-xl bg-[#f8fafc] p-4 border border-[#e2e8f0]">
-                    <span className="text-xs text-[#64748b]">Coordinated Formats</span>
-                    <p className="mt-1 text-2xl font-bold text-[#0f172a]">
-                      {simulationResult.totalPlansGenerated / 2} Pairs
-                    </p>
-                    <span className="text-[11px] text-[#64748b]">Post + Reel synergy daily</span>
-                  </div>
-                </div>
-
-                {/* Simulated Day by Day Breakdown */}
-                <div>
-                  <h4 className="text-sm font-bold text-[#0f172a] mb-3">Simulated Schedule Timeline</h4>
-                  <div className="space-y-3">
-                    {simulationResult.dailyPlans.map((day: any) => (
-                      <div key={day.date} className="rounded-xl border border-[#e2e8f0] p-4 bg-[#fcfbf9]">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="font-bold text-xs text-[#0f172a] flex items-center gap-1.5">
-                            <Calendar size={14} /> Date: {day.date}
-                          </span>
-                          <span className="text-xs text-emerald-700 font-medium">
-                            Diversity: {Math.round(day.visualDiversityScore * 100)}%
-                          </span>
-                        </div>
-                        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-2">
-                          {day.plans.map((p: any) => (
-                            <div key={p.id} className="rounded-lg bg-white p-2.5 border border-[#e2e8f0] text-xs">
-                              <div className="flex items-center justify-between font-semibold text-[#0f172a] mb-1">
-                                <span>{p.brand}</span>
-                                <span className="text-[10px] text-[#64748b]">{p.format}</span>
-                              </div>
-                              <p className="line-clamp-2 text-[#334155]">{p.topic}</p>
-                              <div className="mt-1.5 flex items-center justify-between text-[11px] text-[#64748b]">
-                                <span>{p.angle}</span>
-                                <span className="font-mono">{p.scheduledFor.slice(11, 16)} IST</span>
+                      <div>
+                        {/* Card Header */}
+                        <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-[#f0efec]">
+                          <div className="flex items-center gap-2">
+                            <div
+                              className={`w-7 h-7 rounded-lg flex items-center justify-center font-extrabold text-[12px] text-white ${
+                                isZawaago ? "bg-[#171717]" : "bg-[#2563eb]"
+                              }`}
+                            >
+                              {isZawaago ? "Z" : "I"}
+                            </div>
+                            <div>
+                              <div className="font-bold text-[12px] text-[#171717]">{plan.brand}</div>
+                              <div className="text-[10px] text-[#888] flex items-center gap-1.5">
+                                <span>{isPost ? "Feed Post" : "Video Reel"}</span>
+                                <span>•</span>
+                                <span className="font-medium text-[#444]">{scheduleTimeStr} IST</span>
+                                {plan.dayIndex && (
+                                  <>
+                                    <span>•</span>
+                                    <span className="font-semibold text-[#171717]">Day {plan.dayIndex}</span>
+                                  </>
+                                )}
                               </div>
                             </div>
-                          ))}
+                          </div>
+
+                          {/* Status Pill */}
+                          <div className="flex items-center gap-1.5">
+                            {plan.status === "PUBLISHED" ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#edf8f3] text-[#1b7a54] border border-[#bce2d0] inline-flex items-center gap-1">
+                                <FacebookLogo size={11} weight="fill" />
+                                Published
+                              </span>
+                            ) : plan.status === "READY" ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#eff6ff] text-[#1d4ed8] border border-[#bfdbfe]">
+                                Ready
+                              </span>
+                            ) : plan.status === "SCHEDULED" ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#faf5ff] text-[#7e22ce] border border-[#e9d5ff]">
+                                Scheduled
+                              </span>
+                            ) : plan.status === "FAILED" ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#fff2f0] text-[#b42318] border border-[#fecdca]">
+                                Failed
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#f5f5f4] text-[#78716c] border border-[#e7e5e4]">
+                                Planned
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Topic & Hook */}
+                        <div className="pt-3">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-[9px] font-bold uppercase tracking-wider text-[#888] bg-[#f5f5f4] px-1.5 py-0.5 rounded">
+                              {plan.pillar}
+                            </span>
+                            <span className="text-[9px] text-[#666] bg-[#fafaf9] px-1.5 py-0.5 rounded border border-[#deddd9]">
+                              {plan.angle}
+                            </span>
+                            {plan.qualityScore && (
+                              <span className="text-[9px] font-semibold text-[#1b7a54] ml-auto">
+                                Quality: {plan.qualityScore.toFixed(1)}/10
+                              </span>
+                            )}
+                          </div>
+
+                          <h4 className="font-bold text-[13px] text-[#171717] m-0 mb-1 leading-snug">
+                            {plan.topic}
+                          </h4>
+
+                          <p className="text-[11px] text-[#555] m-0 mb-2 italic line-clamp-2">
+                            "{plan.hook}"
+                          </p>
+
+                          {/* Generated Media Preview / Badges */}
+                          {plan.generatedCaption && (
+                            <div className="p-2 rounded-lg bg-[#fafaf9] border border-[#deddd9] text-[10px] text-[#444] line-clamp-2 mb-2">
+                              <span className="font-bold text-[#222]">Generated Caption: </span>
+                              {plan.generatedCaption}
+                            </div>
+                          )}
+
+                          {plan.generatedImageUrl && (
+                            <div className="flex items-center gap-2 text-[10px] text-[#1b7a54] font-semibold mb-2">
+                              <CheckCircle size={12} weight="fill" />
+                              <span>Flux Visual Stored in R2</span>
+                            </div>
+                          )}
+
+                          {plan.facebookPostId && (
+                            <div className="p-1.5 rounded bg-[#edf8f3] text-[10px] font-bold text-[#1b7a54] inline-flex items-center gap-1.5 border border-[#bce2d0]">
+                              <FacebookLogo size={12} weight="fill" />
+                              <span>Facebook ID: {plan.facebookPostId}</span>
+                            </div>
+                          )}
                         </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
+
+                      {/* Card Footer Actions */}
+                      <div className="pt-3 mt-3 border-t border-[#f0efec] flex items-center justify-between gap-2">
+                        <span className="text-[10px] text-[#888]">
+                          {scheduleDateStr} • {scheduleTimeStr} IST
+                        </span>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => setSelectedPlanDetail(plan)}
+                            className="small-action text-[10px] font-semibold cursor-pointer"
+                          >
+                            <Eye size={12} />
+                            <span>Inspect</span>
+                          </button>
+
+                          {plan.status === "FAILED" ? (
+                            <button
+                              onClick={() => retryJob(plan.id)}
+                              disabled={actionInProgress !== null}
+                              className="small-action text-[10px] font-bold text-[#b42318] hover:bg-[#fff2f0] cursor-pointer"
+                            >
+                              <ArrowClockwise size={12} />
+                              <span>Retry</span>
+                            </button>
+                          ) : plan.status !== "PUBLISHED" ? (
+                            <button
+                              onClick={() => executeSingleItem(plan.id, true)}
+                              disabled={actionInProgress !== null}
+                              className="small-action text-[10px] font-bold text-[#171717] bg-[#f5f5f4] hover:bg-[#e7e5e4] cursor-pointer"
+                              title="Run full pipeline and publish now"
+                            >
+                              {actionInProgress === `exec-${plan.id}` ? (
+                                <SpinnerGap size={12} className="animate-spin" />
+                              ) : (
+                                <Play size={12} weight="fill" />
+                              )}
+                              <span>Execute Now</span>
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
         )}
 
-        {/* TAB 3: BRAND BRAIN REGISTRY */}
+        {/* TAB 2: State Machine Jobs */}
+        {activeTab === "jobs" && (
+          <div className="panel p-6 bg-white border border-[#deddd9] rounded-xl">
+            <div className="flex items-center justify-between pb-4 border-b border-[#f0efec] mb-4">
+              <div>
+                <h3 className="text-[15px] font-bold text-[#171717] m-0">Content Job State Machine</h3>
+                <p className="text-[11px] text-[#888] m-0">
+                  Resilient background state transitions with idempotency guards and retry tracking
+                </p>
+              </div>
+              <button onClick={loadJobs} className="icon-button text-[11px] font-semibold">
+                <ArrowClockwise size={13} />
+                <span>Refresh Jobs</span>
+              </button>
+            </div>
+
+            {jobs.length === 0 ? (
+              <div className="p-8 text-center text-[#888] text-[12px]">
+                No jobs currently in queue. Generate a 10-day plan to initiate background job orchestrations.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-[11px]">
+                  <thead>
+                    <tr className="border-b border-[#deddd9] text-[#777] font-bold uppercase text-[9px] tracking-wider">
+                      <th className="py-2.5 px-3">Job ID</th>
+                      <th className="py-2.5 px-3">Brand</th>
+                      <th className="py-2.5 px-3">Format</th>
+                      <th className="py-2.5 px-3">State</th>
+                      <th className="py-2.5 px-3">Step</th>
+                      <th className="py-2.5 px-3">Retries</th>
+                      <th className="py-2.5 px-3">FB Post ID</th>
+                      <th className="py-2.5 px-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#f0efec]">
+                    {jobs.map((j) => (
+                      <tr key={j.id} className="hover:bg-[#fafaf9]">
+                        <td className="py-2 px-3 font-mono text-[10px] text-[#555]">{j.id.slice(0, 16)}…</td>
+                        <td className="py-2 px-3 font-semibold">{j.brand}</td>
+                        <td className="py-2 px-3 text-[#666]">{j.format}</td>
+                        <td className="py-2 px-3">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              j.state === "PUBLISHED"
+                                ? "bg-[#edf8f3] text-[#1b7a54]"
+                                : j.state === "FAILED"
+                                ? "bg-[#fff2f0] text-[#b42318]"
+                                : j.state === "READY"
+                                ? "bg-[#eff6ff] text-[#1d4ed8]"
+                                : "bg-[#f5f5f4] text-[#666]"
+                            }`}
+                          >
+                            {j.state}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-[#777]">{j.currentStep || "-"}</td>
+                        <td className="py-2 px-3 text-[#777]">
+                          {j.retryCount} / {j.maxRetries}
+                        </td>
+                        <td className="py-2 px-3 font-mono text-[10px] text-[#222]">
+                          {j.facebookPostId || "-"}
+                        </td>
+                        <td className="py-2 px-3 text-right">
+                          {j.state === "FAILED" ? (
+                            <button
+                              onClick={() => retryJob(j.id)}
+                              className="small-action text-[10px] font-bold text-[#b42318] cursor-pointer"
+                            >
+                              Retry
+                            </button>
+                          ) : j.state !== "PUBLISHED" ? (
+                            <button
+                              onClick={() => executeSingleItem(j.planId, true)}
+                              className="small-action text-[10px] font-bold text-[#171717] cursor-pointer"
+                            >
+                              Execute
+                            </button>
+                          ) : (
+                            <span className="text-[10px] text-[#1b7a54] font-semibold">Complete</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 3: Brand Brain */}
         {activeTab === "brands" && (
-          <div className="grid gap-6 md:grid-cols-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {brands.map((b) => (
-              <div key={b.name} className="rounded-2xl border border-[#e2e8f0] bg-white p-6 shadow-sm space-y-5">
-                <div className="flex items-center justify-between">
+              <div key={b.id} className="panel p-5 bg-white border border-[#deddd9] rounded-xl">
+                <div className="flex items-center gap-3 pb-3 border-b border-[#f0efec] mb-3">
+                  <div className="brand-mark bg-[#171717]">{b.name[0]}</div>
                   <div>
-                    <h3 className="text-lg font-bold text-[#0f172a]">{b.name}</h3>
-                    <p className="text-xs text-[#64748b]">{b.handle}</p>
-                  </div>
-                  <div
-                    className="h-8 w-8 rounded-full border border-black/10"
-                    style={{ backgroundColor: b.visualIdentity.colorPalette.primaryHex }}
-                  />
-                </div>
-
-                <div>
-                  <h4 className="text-xs font-semibold text-[#64748b] uppercase tracking-wider">Mission</h4>
-                  <p className="mt-1 text-xs text-[#334155] leading-relaxed">{b.mission}</p>
-                </div>
-
-                <div>
-                  <h4 className="text-xs font-semibold text-[#64748b] uppercase tracking-wider">Tone & Voice</h4>
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {b.voice.toneDescriptors.map((t) => (
-                      <span key={t} className="rounded-full bg-[#f1f5f9] px-2.5 py-0.5 text-xs text-[#334155]">
-                        {t}
-                      </span>
-                    ))}
+                    <h3 className="text-[15px] font-bold text-[#171717] m-0">{b.name}</h3>
+                    <p className="text-[11px] text-[#888] m-0">{b.handle}</p>
                   </div>
                 </div>
 
-                <div>
-                  <h4 className="text-xs font-semibold text-[#64748b] uppercase tracking-wider">Content Pillars</h4>
-                  <div className="mt-2 space-y-2">
-                    {b.pillars.map((pil) => (
-                      <div key={pil.id} className="rounded-lg bg-[#f8fafc] p-2.5 border border-[#e2e8f0]">
-                        <div className="flex items-center justify-between text-xs font-bold text-[#0f172a]">
-                          <span>{pil.name}</span>
-                          <span className="text-[#64748b] font-normal">{Math.round(pil.weight * 100)}% Weight</span>
-                        </div>
-                        <p className="mt-1 text-[11px] text-[#64748b]">
-                          {pil.subPillars.map((s) => s.name).join(" • ")}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <p className="text-[12px] text-[#555] mb-3">{b.mission}</p>
 
-                <div>
-                  <h4 className="text-xs font-semibold text-rose-700 uppercase tracking-wider">Strictly Banned Clichés</h4>
-                  <div className="mt-1.5 flex flex-wrap gap-1">
-                    {b.voice.bannedClichés.map((cliche) => (
-                      <span
-                        key={cliche}
-                        className="rounded bg-rose-50 px-2 py-0.5 text-[11px] text-rose-700 border border-rose-200"
-                      >
-                        ✕ {cliche}
-                      </span>
-                    ))}
+                <div className="space-y-3 text-[11px]">
+                  <div>
+                    <span className="font-bold text-[#222] block mb-1">Content Pillars:</span>
+                    <div className="flex flex-wrap gap-1">
+                      {b.pillars.map((p) => (
+                        <span key={p.id} className="px-2 py-0.5 rounded bg-[#f5f5f4] text-[#555] border border-[#deddd9]">
+                          {p.name} ({Math.round(p.weight * 100)}%)
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <span className="font-bold text-[#222] block mb-1">Target Audiences:</span>
+                    <div className="flex flex-wrap gap-1">
+                      {b.targetAudiences.map((a) => (
+                        <span key={a.id} className="px-2 py-0.5 rounded bg-[#eff6ff] text-[#1d4ed8] border border-[#bfdbfe]">
+                          {a.label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <span className="font-bold text-[#222] block mb-1">Preferred Visual Families:</span>
+                    <div className="flex flex-wrap gap-1">
+                      {b.visualIdentity.preferredFamilies.map((v) => (
+                        <span key={v} className="px-2 py-0.5 rounded bg-[#faf5ff] text-[#7e22ce] border border-[#e9d5ff]">
+                          {v}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -844,204 +1015,247 @@ export default function ContentEngineDashboard() {
           </div>
         )}
 
-        {/* TAB 4: CONTENT MEMORY & ANTI-REPETITION */}
+        {/* TAB 4: Content Memory */}
         {activeTab === "memory" && (
-          <div className="space-y-6">
-            <div className="rounded-2xl border border-[#e2e8f0] bg-white p-6 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <h3 className="text-base font-bold text-[#0f172a]">Long-Term Content Memory Store</h3>
-                  <p className="mt-1 text-xs text-[#64748b]">
-                    Search past planned, generated, and published items to verify semantic fingerprints and freshness.
-                  </p>
-                </div>
+          <div className="panel p-6 bg-white border border-[#deddd9] rounded-xl">
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-[#f0efec] mb-4">
+              <div>
+                <h3 className="text-[15px] font-bold text-[#171717] m-0">Content Memory Ledger</h3>
+                <p className="text-[11px] text-[#888] m-0">
+                  Anti-repetition database tracking topics, angles, and visual families over the past 30 days
+                </p>
+              </div>
 
-                <div className="flex items-center gap-2">
-                  <div className="relative">
-                    <MagnifyingGlass size={16} className="absolute left-3 top-2.5 text-[#94a3b8]" />
-                    <input
-                      type="text"
-                      value={memorySearch}
-                      onChange={(e) => {
-                        setMemorySearch(e.target.value);
-                        loadMemory(e.target.value);
-                      }}
-                      placeholder="Search topics, hooks, visual styles…"
-                      className="w-72 rounded-lg border border-[#cbd5e1] pl-9 pr-3 py-1.5 text-xs text-[#1e293b]"
-                    />
-                  </div>
-                </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Search memory topics or hooks…"
+                  value={memorySearch}
+                  onChange={(e) => {
+                    setMemorySearch(e.target.value);
+                    loadMemory(e.target.value);
+                  }}
+                  className="min-h-[34px] px-3 text-[11px] rounded-lg border border-[#deddd9] bg-[#fafaf9] outline-none w-[240px]"
+                />
               </div>
             </div>
 
-            <div className="rounded-2xl border border-[#e2e8f0] bg-white overflow-hidden shadow-sm">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="border-b border-[#e2e8f0] bg-[#f8fafc] text-[#475569] font-semibold">
-                    <th className="py-3 px-4">Brand</th>
-                    <th className="py-3 px-4">Format</th>
-                    <th className="py-3 px-4">Topic & Core Concept</th>
-                    <th className="py-3 px-4">Narrative Angle</th>
-                    <th className="py-3 px-4">Visual Family</th>
-                    <th className="py-3 px-4">Date Added</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#f1f5f9]">
-                  {memoryRecords.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="py-8 text-center text-[#94a3b8]">
-                        No content memory records found.
-                      </td>
+            {memoryRecords.length === 0 ? (
+              <div className="p-8 text-center text-[#888] text-[12px]">
+                No memory records found. Generate plans to start accumulating anti-repetition memory.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-[11px]">
+                  <thead>
+                    <tr className="border-b border-[#deddd9] text-[#777] font-bold uppercase text-[9px] tracking-wider">
+                      <th className="py-2.5 px-3">Brand</th>
+                      <th className="py-2.5 px-3">Format</th>
+                      <th className="py-2.5 px-3">Pillar</th>
+                      <th className="py-2.5 px-3">Topic</th>
+                      <th className="py-2.5 px-3">Angle</th>
+                      <th className="py-2.5 px-3">Visual Family</th>
+                      <th className="py-2.5 px-3">Status</th>
                     </tr>
-                  ) : (
-                    memoryRecords.map((r) => (
-                      <tr key={r.id} className="hover:bg-[#faf9f7]">
-                        <td className="py-3 px-4 font-bold text-[#0f172a]">{r.brand}</td>
-                        <td className="py-3 px-4">
-                          <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
-                            {r.format}
+                  </thead>
+                  <tbody className="divide-y divide-[#f0efec]">
+                    {memoryRecords.map((m) => (
+                      <tr key={m.id} className="hover:bg-[#fafaf9]">
+                        <td className="py-2 px-3 font-semibold">{m.brand}</td>
+                        <td className="py-2 px-3 text-[#666]">{m.format}</td>
+                        <td className="py-2 px-3 text-[#666]">{m.pillar}</td>
+                        <td className="py-2 px-3 font-medium text-[#171717]">{m.topic}</td>
+                        <td className="py-2 px-3 text-[#777]">{m.angle}</td>
+                        <td className="py-2 px-3">
+                          <span className="px-2 py-0.5 rounded text-[10px] bg-[#fafaf9] border border-[#deddd9] text-[#555]">
+                            {m.visualFamily}
                           </span>
                         </td>
-                        <td className="py-3 px-4 font-medium text-[#1e293b]">{r.topic}</td>
-                        <td className="py-3 px-4 text-[#475569]">{r.angle}</td>
-                        <td className="py-3 px-4 text-[#475569]">{r.visualFamily}</td>
-                        <td className="py-3 px-4 text-[#64748b]">{r.createdAt.slice(0, 10)}</td>
+                        <td className="py-2 px-3 text-[10px] font-semibold text-[#1b7a54]">{m.status}</td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
-        {/* TAB 5: PERFORMANCE INTELLIGENCE */}
-        {activeTab === "intelligence" && (
-          <div className="space-y-6">
-            <div className="rounded-2xl border border-[#e2e8f0] bg-white p-6 shadow-sm">
-              <h3 className="text-base font-bold text-[#0f172a]">Performance Feedback & Strategic Recommendations</h3>
-              <p className="mt-1 text-xs text-[#64748b]">
-                Continuous algorithmic feedback analyzing engagement signals to optimize future topic angles and visual
-                treatments.
-              </p>
+        {/* TAB 5: 30-Day Strategy Simulation */}
+        {activeTab === "simulation" && (
+          <div className="panel p-6 bg-white border border-[#deddd9] rounded-xl">
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-[#f0efec] mb-4">
+              <div>
+                <h3 className="text-[15px] font-bold text-[#171717] m-0">30-Day Content Strategy Simulator</h3>
+                <p className="text-[11px] text-[#888] m-0">
+                  Dry-run verification engine to prove zero repetition loops and continuous visual diversity
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <select
+                  value={simulationDays}
+                  onChange={(e) => setSimulationDays(Number(e.target.value))}
+                  className="min-h-[34px] px-3 text-[11px] rounded-lg border border-[#deddd9] bg-[#fafaf9] font-medium"
+                >
+                  <option value={7}>7 Days Simulation</option>
+                  <option value={14}>14 Days Simulation</option>
+                  <option value={30}>30 Days Simulation</option>
+                </select>
+
+                <button
+                  onClick={runSimulation}
+                  disabled={loading}
+                  className="publish-primary !min-h-[34px] px-4 text-[11px] font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  {loading ? <SpinnerGap size={13} className="animate-spin" /> : <Sparkle size={13} />}
+                  <span>Run Simulation</span>
+                </button>
+              </div>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              {recommendations.map((rec, idx) => (
-                <div key={idx} className="rounded-2xl border border-[#e2e8f0] bg-white p-5 shadow-sm space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="rounded-md bg-blue-50 px-2.5 py-1 text-xs font-bold text-blue-800 border border-blue-200">
-                      {rec.brand}
-                    </span>
-                    <span className="text-xs font-semibold text-emerald-700">
-                      Confidence: {Math.round(rec.confidenceScore * 100)}%
-                    </span>
+            {simulationResult ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="p-4 rounded-xl bg-[#fafaf9] border border-[#deddd9]">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-[#777]">Total Simulated Plans</div>
+                    <div className="text-[26px] font-extrabold text-[#171717]">{simulationResult.totalPlansGenerated}</div>
                   </div>
-
-                  <div>
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-[#64748b]">Action Directive</span>
-                    <h4 className="text-sm font-bold text-[#0f172a]">{rec.suggestedAction.replace(/_/g, " ")}</h4>
+                  <div className="p-4 rounded-xl bg-[#edf8f3] border border-[#bce2d0]">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-[#1b7a54]">Repetition Violations</div>
+                    <div className="text-[26px] font-extrabold text-[#1b7a54]">{simulationResult.repetitionViolationsCount}</div>
                   </div>
-
-                  <p className="text-xs text-[#334155] leading-relaxed">{rec.reasoning}</p>
-
-                  <div className="rounded-lg bg-[#f8fafc] p-3 text-xs border border-[#e2e8f0]">
-                    <span className="font-semibold text-[#0f172a]">Target Subject:</span> {rec.topic}
-                    {rec.angle && (
-                      <span className="ml-2 text-[#64748b]">
-                        • Angle: <strong className="text-[#334155]">{rec.angle}</strong>
-                      </span>
-                    )}
-                    {rec.recommendedVisualFamily && (
-                      <span className="ml-2 text-[#64748b]">
-                        • Visual Family: <strong className="text-[#334155]">{rec.recommendedVisualFamily}</strong>
-                      </span>
-                    )}
+                  <div className="p-4 rounded-xl bg-[#eff6ff] border border-[#bfdbfe]">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-[#1d4ed8]">Visual Diversity Index</div>
+                    <div className="text-[26px] font-extrabold text-[#1d4ed8]">
+                      {(simulationResult.overallVisualDiversityIndex * 100).toFixed(0)}%
+                    </div>
                   </div>
                 </div>
-              ))}
+
+                <div className="p-3 rounded-lg bg-[#fafaf9] border border-[#deddd9] text-[12px] text-[#444]">
+                  <strong>Simulation Summary: </strong>
+                  {simulationResult.summaryRationale}
+                </div>
+              </div>
+            ) : (
+              <div className="p-8 text-center text-[#888] text-[12px]">
+                Click "Run Simulation" above to dry-run 30 consecutive days of autonomous content strategy.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Plan Detail Modal */}
+        {selectedPlanDetail && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+            <div className="panel max-w-[700px] w-full max-h-[90vh] overflow-y-auto bg-white p-6 rounded-2xl shadow-2xl">
+              <div className="flex items-center justify-between pb-3 border-b border-[#f0efec] mb-4">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-[14px] text-[#171717]">{selectedPlanDetail.brand}</span>
+                  <span className="text-[11px] text-[#888]">({selectedPlanDetail.format})</span>
+                  <span className="text-[10px] font-bold text-[#1b7a54] bg-[#edf8f3] px-2 py-0.5 rounded">
+                    Day {selectedPlanDetail.dayIndex || 1}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setSelectedPlanDetail(null)}
+                  className="icon-button !min-h-[30px] p-1 text-[#888] hover:text-[#171717]"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="space-y-3 text-[12px]">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#888]">Core Topic & Angle</span>
+                  <div className="font-bold text-[14px] text-[#171717] mt-0.5">{selectedPlanDetail.topic}</div>
+                  <div className="text-[11px] text-[#666]">Angle: {selectedPlanDetail.angle} • Pillar: {selectedPlanDetail.pillar}</div>
+                </div>
+
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#888]">Narrative Hook</span>
+                  <div className="p-2.5 rounded-lg bg-[#fafaf9] border border-[#deddd9] italic text-[#333]">
+                    "{selectedPlanDetail.hook}"
+                  </div>
+                </div>
+
+                {selectedPlanDetail.captionBrief && (
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-[#888]">Caption Brief</span>
+                    <div className="p-2.5 rounded-lg bg-[#fafaf9] border border-[#deddd9] text-[#444]">
+                      {selectedPlanDetail.captionBrief}
+                    </div>
+                  </div>
+                )}
+
+                {selectedPlanDetail.creativeDirection && (
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-[#888]">Creative Direction</span>
+                    <div className="p-2.5 rounded-lg bg-[#fafaf9] border border-[#deddd9] space-y-1 text-[11px]">
+                      <div>
+                        <strong>Visual Family: </strong>
+                        {selectedPlanDetail.creativeDirection.visualFamily}
+                      </div>
+                      <div>
+                        <strong>Composition: </strong>
+                        {selectedPlanDetail.creativeDirection.composition}
+                      </div>
+                      <div>
+                        <strong>Metaphor: </strong>
+                        {selectedPlanDetail.creativeDirection.visualMetaphor}
+                      </div>
+                      {selectedPlanDetail.creativeDirection.promptOutput && (
+                        <div className="pt-1 mt-1 border-t border-[#eee]">
+                          <strong>Prompt: </strong>
+                          <span className="text-[#666]">{selectedPlanDetail.creativeDirection.promptOutput}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {selectedPlanDetail.scenes && selectedPlanDetail.scenes.length > 0 && (
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-[#888]">Reel Storyboard Scenes (5)</span>
+                    <div className="space-y-2 mt-1">
+                      {selectedPlanDetail.scenes.map((s) => (
+                        <div key={s.sceneNumber} className="p-2.5 rounded-lg bg-[#fafaf9] border border-[#deddd9] text-[11px]">
+                          <div className="font-bold text-[#171717]">
+                            Scene {s.sceneNumber} ({s.durationSeconds}s) • {s.visualFamily}
+                          </div>
+                          <div className="text-[#333] mt-0.5">
+                            <strong>Narration: </strong>"{s.narration}"
+                          </div>
+                          <div className="text-[#666] text-[10px] mt-0.5">
+                            <strong>Overlay: </strong>"{s.captionOverlayText}"
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="pt-3 border-t border-[#f0efec] flex items-center justify-between">
+                  <span className="text-[11px] text-[#888]">Scheduled For: {selectedPlanDetail.scheduledFor}</span>
+                  {selectedPlanDetail.status !== "PUBLISHED" && (
+                    <button
+                      onClick={() => {
+                        executeSingleItem(selectedPlanDetail.id, true);
+                        setSelectedPlanDetail(null);
+                      }}
+                      className="publish-primary !min-h-[36px] px-4 text-[11px] font-bold inline-flex items-center gap-1.5"
+                    >
+                      <Play size={13} weight="fill" />
+                      <span>Execute Item Now</span>
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         )}
       </div>
-
-      {/* DETAIL MODAL */}
-      {selectedPlanDetail && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
-          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
-            <div className="flex items-center justify-between border-b border-[#e2e8f0] pb-4">
-              <div>
-                <span className="text-xs font-bold text-blue-800">{selectedPlanDetail.brand}</span>
-                <h3 className="text-base font-bold text-[#0f172a]">{selectedPlanDetail.topic}</h3>
-              </div>
-              <button
-                onClick={() => setSelectedPlanDetail(null)}
-                className="rounded-lg p-1.5 text-[#64748b] hover:bg-[#f1f5f9]"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="mt-4 space-y-4 text-xs text-[#334155]">
-              <div>
-                <span className="font-semibold text-[#0f172a]">Narrative Angle:</span> {selectedPlanDetail.angle}
-              </div>
-              <div>
-                <span className="font-semibold text-[#0f172a]">Opening Hook:</span> "{selectedPlanDetail.hook}"
-              </div>
-              <div>
-                <span className="font-semibold text-[#0f172a]">Call to Action:</span> {selectedPlanDetail.cta}
-              </div>
-
-              {selectedPlanDetail.creativeDirection && (
-                <div className="rounded-xl bg-[#f8fafc] p-4 border border-[#e2e8f0] space-y-2">
-                  <h4 className="font-bold text-[#0f172a]">Creative Director & Flux Visual Prompt</h4>
-                  <p>
-                    <strong>Visual Family:</strong> {selectedPlanDetail.creativeDirection.visualFamily}
-                  </p>
-                  <p>
-                    <strong>Visual Metaphor:</strong> {selectedPlanDetail.creativeDirection.visualMetaphor}
-                  </p>
-                  <p>
-                    <strong>Lighting & Mood:</strong> {selectedPlanDetail.creativeDirection.lighting}
-                  </p>
-                  <p>
-                    <strong>Camera Perspective:</strong> {selectedPlanDetail.creativeDirection.cameraPerspective}
-                  </p>
-                  <div className="mt-2 rounded bg-white p-2.5 font-mono text-[11px] text-[#475569] border border-[#cbd5e1]">
-                    {selectedPlanDetail.creativeDirection.promptOutput}
-                  </div>
-                </div>
-              )}
-
-              {selectedPlanDetail.scenes && selectedPlanDetail.scenes.length > 0 && (
-                <div className="space-y-2">
-                  <h4 className="font-bold text-[#0f172a]">Reel 5-Scene Storyboard</h4>
-                  {selectedPlanDetail.scenes.map((sc) => (
-                    <div key={sc.sceneNumber} className="rounded-lg bg-[#f8fafc] p-3 border border-[#e2e8f0]">
-                      <div className="flex items-center justify-between font-bold text-[#0f172a]">
-                        <span>Scene {sc.sceneNumber} ({sc.durationSeconds}s)</span>
-                        <span className="text-[11px] text-[#64748b]">{sc.captionOverlayText}</span>
-                      </div>
-                      <p className="mt-1 text-xs text-[#334155]">"{sc.narration}"</p>
-                      <p className="mt-1 text-[11px] text-[#64748b]">Camera: {sc.cameraView}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="mt-6 pt-4 border-t border-[#e2e8f0] flex items-center justify-end gap-2">
-              <button
-                onClick={() => setSelectedPlanDetail(null)}
-                className="rounded-lg border border-[#cbd5e1] px-4 py-2 text-xs font-semibold text-[#475569] hover:bg-[#f1f5f9]"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </main>
+    </div>
   );
 }

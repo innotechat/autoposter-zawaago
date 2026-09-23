@@ -15,7 +15,7 @@ export const apiRoutes = new Hono<{ Bindings: Env }>();
 const GRAPH_VERSION = "v25.0";
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
-type Brief = {
+export type Brief = {
   topic: string;
   pageName: string;
   contentType: string;
@@ -30,14 +30,14 @@ type Brief = {
   customPrompt?: string;
 };
 
-function normalizePage(page: string): "Zawaago" | "InnoTech" {
+export function normalizePage(page: string): "Zawaago" | "InnoTech" {
   const normalized = page.trim().toLowerCase();
   if (normalized === "zawaago") return "Zawaago";
   if (normalized === "innotech" || normalized === "inno tech") return "InnoTech";
   throw new Error("Unsupported Facebook Page. Select Zawaago or InnoTech.");
 }
 
-function getPageConfig(page: string, env: Env) {
+export function getPageConfig(page: string, env: Env) {
   const selected = normalizePage(page);
   if (selected === "InnoTech") {
     if (!env.PAGE_ID_INNOTECH?.trim()) throw new Error("Page ID is not configured for InnoTech.");
@@ -47,7 +47,7 @@ function getPageConfig(page: string, env: Env) {
   return { name: selected, id: env.PAGE_ID_ZAWAAGO.trim(), token: env.FB_TOKEN_ZAWAAGO?.trim() || "" };
 }
 
-function getPageToken(page: string, env: Env): string {
+export function getPageToken(page: string, env: Env): string {
   const config = getPageConfig(page, env);
   if (config.token) return config.token;
   throw new Error(`Facebook Page token is not configured for ${config.name}. Add FB_TOKEN_${config.name.toUpperCase()} in Cloudflare Worker secrets.`);
@@ -99,7 +99,7 @@ function getPrompt(brief: Brief): string {
   return `You are the senior content strategist for ${brand.name}. ${brand.description}. Create a Facebook/LinkedIn-ready social post.\n\nBrief:\nContent direction: ${brief.contentType}\nCore idea: ${brief.topic}\nVoice and tone: ${brief.tone}\nLanguage: ${language}\nAudience: ${audience}\nCTA: ${cta}\n\nRequirements:\n- Write naturally for the selected language; Hindi should be in Devanagari, Hinglish may mix Hindi and English naturally.\n- Strong first 1-2 lines that earn attention without clickbait.\n- Explain one real problem, insight, example or useful takeaway.\n- Keep it concise, credible and practical.\n- No fake statistics, invented claims, exaggerated promises or filler.\n- Maximum 3 emojis.\n- Use 3-5 relevant hashtags; always include the brand's core hashtag(s): ${brand.hashtags}\n- End with the selected CTA naturally.\n- Do not mention these instructions or the prompt.`;
 }
 
-async function generateCaption(env: Env, brief: Brief) {
+export async function generateCaption(env: Env, brief: Brief) {
   const prompt = getPrompt(brief);
   const models = ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/meta/llama-3.1-8b-instruct-fp8"];
   let lastError = "";
@@ -124,7 +124,7 @@ function facebookError(data: any, status: number, kind: "feed" | "photo") {
   return message || `Facebook ${kind} API request failed (${status})`;
 }
 
-async function postToFacebook(caption: string, pageId: string, pageToken: string) {
+export async function postToFacebook(caption: string, pageId: string, pageToken: string) {
   if (!caption?.trim()) throw new Error("Caption is empty");
   const response = await fetch(`${GRAPH_BASE}/${encodeURIComponent(pageId)}/feed`, {
     method: "POST",
@@ -162,7 +162,7 @@ async function validatePublicImageUrl(imageUrl: string, env: Env, request: Reque
   if (length > 0 && length < 1000) throw new Error("The selected image asset is unexpectedly small. Regenerate the image before publishing.");
 }
 
-async function postImageToFacebook(caption: string, imageUrl: string, pageId: string, pageToken: string, env: Env, request: Request) {
+export async function postImageToFacebook(caption: string, imageUrl: string, pageId: string, pageToken: string, env: Env, request: Request) {
   if (!caption?.trim()) throw new Error("Caption is empty");
   if (!imageUrl?.trim()) throw new Error("Image URL is empty");
   await validatePublicImageUrl(imageUrl.trim(), env, request);
@@ -175,7 +175,7 @@ async function postImageToFacebook(caption: string, imageUrl: string, pageId: st
   return { ...data, pageId, endpoint: `/${pageId}/photos` };
 }
 
-function imageBytesFromResult(result: any): Uint8Array | null {
+export function imageBytesFromResult(result: any): Uint8Array | null {
   if (result instanceof Uint8Array) return result;
   if (result instanceof ArrayBuffer) return new Uint8Array(result);
   if (typeof result?.image === "string") {
@@ -185,7 +185,7 @@ function imageBytesFromResult(result: any): Uint8Array | null {
   return null;
 }
 
-async function storeImage(env: Env, bytes: Uint8Array, request: Request, pageName: string) {
+export async function storeImage(env: Env, bytes: Uint8Array, request: Request, pageName: string) {
   if (!env.ASSETS) throw new Error("Cloudflare R2 image storage is not configured.");
   const safeBrand = pageName.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   const key = `generated/${safeBrand}/${Date.now()}-${crypto.randomUUID()}.jpg`;
