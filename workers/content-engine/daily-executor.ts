@@ -245,13 +245,7 @@ async function executePostPlan(
       customPrompt: `${scene.visualPrompt} Clean artwork only. No text, logos, letters, numbers, subtitles or watermarks. Designed for a vertical 9:16 educational Reel.`
     };
     const generated = await generateProductionImage(env, brief, { url: origin } as Request);
-    const bytes = await (await fetch(generated.imageUrl)).arrayBuffer();
-    if (bytes.byteLength < 1000) throw new Error(`Scene ${i + 1} generated image could not be reloaded from R2.`);
-    const imageBytes = new Uint8Array(bytes);
-    const key = `generated/${safeBrand}/reels/${plan.id}-scene-${i + 1}.jpg`;
-    await env.ASSETS.put(key, imageBytes, { httpMetadata: { contentType: "image/jpeg", cacheControl: "public, max-age=31536000, immutable" }, customMetadata: { planId: plan.id, scene: String(i + 1), source: "autonomous-content-engine" } });
-    const url = `${origin}/api/autoposter/assets/${encodeURIComponent(key)}`;
-    plan.scenes[i].imageUrl = url;
+    const url = generated.imageUrl;
     sceneUrls.push(url);
   }
   const narration = plan.scenes.map(s => s.narration).join(" ").trim();
