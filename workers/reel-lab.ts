@@ -181,6 +181,26 @@ async function generateMeloAudio(ai: Ai, text: string, language: TtsLanguage) {
   throw new Error("MeloTTS returned an unsupported audio response.");
 }
 
+export async function synthesizeReelNarration(
+  env: Env,
+  text: string,
+  languageName = "Hinglish",
+  speaker = "shubh"
+): Promise<{ bytes: Uint8Array; contentType: string }> {
+  const language = TTS_LANGUAGES[languageName];
+  if (!language) throw new Error(`Unsupported Reel language: ${languageName}`);
+  if (!text.trim()) throw new Error("Reel narration text is required.");
+  if (text.length > 5000) throw new Error("Narration is too long for Reel generation.");
+  if (languageName === "English") {
+    const bytes = await generateMeloAudio(env.AI, text, language);
+    return { bytes, contentType: "audio/mpeg" };
+  }
+  const apiKey = env.SARVAM_API_KEY?.trim();
+  if (!apiKey) throw new Error("SARVAM_API_KEY is required for autonomous Hindi/Hinglish Reel generation.");
+  const bytes = await generateSarvamAudio(apiKey, text, language, speaker);
+  return { bytes, contentType: "audio/wav" };
+}
+
 function audioBody(bytes: Uint8Array): ArrayBuffer {
   const buffer = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buffer).set(bytes);
