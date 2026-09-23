@@ -318,7 +318,8 @@ async function executePostPlan(
     }
 
     // Persist in scheduler queue
-    if (env.ASSETS) {
+    if (!env.ASSETS) throw new Error("R2 asset storage is required for scheduled Post publishing.");
+    {
       try {
         const scheduleRecord = {
           id: plan.id,
@@ -479,7 +480,8 @@ async function executeReelPlan(
       await updatePlanInD1(plan.id, { status: "SCHEDULED" }, env.DB);
     }
 
-    if (env.ASSETS) {
+    if (!env.ASSETS) throw new Error("R2 asset storage is required for scheduled Reel publishing.");
+    {
       try {
         const scheduleRecord = {
           id: plan.id,
