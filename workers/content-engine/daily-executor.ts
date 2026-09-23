@@ -15,6 +15,7 @@ import {
   type Brief
 } from "../api";
 import { publishFacebookReel } from "../reels";
+import { renderReelInContainer } from "../reel-renderer";
 import { writeHistory, sanitizeHistoryError } from "../history";
 
 export interface ExecutionOptions {
@@ -336,6 +337,47 @@ async function executePostPlan(
   }
 }
 
+async function renderAutonomousReel(plan: ReelPlan, env: any, origin: string): Promise<string> {
+  if (!env.AI || !env.ASSETS) throw new Error("Workers AI and R2 are required for autonomous Reel generation.");
+  const safeBrand = plan.brand.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  const sceneUrls: string[] = [];
+  for (let i = 0; i < plan.scenes.length; i++) {
+    const scene = plan.scenes[i];
+    const aiResult: any = await env.AI.run("@cf/black-forest-labs/flux-1-schnell" as any, { prompt: `${scene.visualPrompt} Clean premium artwork only. No text, letters, numbers, logos, watermarks, subtitles or UI. Vertical 9:16.`, steps: 8 });
+    const bytes = imageBytesFromResult(aiResult);
+    if (!bytes || bytes.length < 1000) throw new Error(`Scene ${i + 1} image generation returned no usable image.`);
+    const key = `generated/${safeBrand}/reels/${plan.id}-scene-${i + 1}.jpg`;
+    await env.ASSETS.put(key, bytes, { httpMetadata: { contentType: "image/jpeg", cacheControl: "public, max-age=31536000, immutable" }, customMetadata: { planId: plan.id, scene: String(i + 1), source: "autonomous-content-engine" } });
+    const url = `${origin}/api/autoposter/assets/${encodeURIComponent(key)}`;
+    plan.scenes[i].imageUrl = url;
+    sceneUrls.push(url);
+  }
+  const narration = plan.scenes.map(s => s.narration).join(" ").trim();
+  let audioBytes: Uint8Array;
+  if (plan.language === "English") {
+    const r: any = await env.AI.run("@cf/myshell-ai/melotts" as any, { prompt: narration, lang: "en" });
+    audioBytes = r instanceof ArrayBuffer ? new Uint8Array(r) : r instanceof Uint8Array ? r : r?.body instanceof ReadableStream ? new Uint8Array(await new Response(r.body).arrayBuffer()) : r?.audio ? Uint8Array.from(atob(r.audio), ch => ch.charCodeAt(0)) : new Uint8Array();
+  } else {
+    const apiKey = env.SARVAM_API_KEY?.trim();
+    if (!apiKey) throw new Error("SARVAM_API_KEY is required for autonomous Hindi/Hinglish Reel generation.");
+    if (narration.length > 2400) throw new Error("Reel narration exceeds Sarvam's 2,400 character limit.");
+    const response = await fetch("https://api.sarvam.ai/text-to-speech", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json", "api-subscription-key": apiKey }, body: JSON.stringify({ text: narration, model: "bulbul:v3", language_code: "hi-IN", speaker: "shubh", pace: 1, temperature: 0.6, speech_sample_rate: 24000 }) });
+    if (!response.ok) throw new Error(`Sarvam TTS returned HTTP ${response.status}`);
+    const data: any = await response.json();
+    if (typeof data?.audios?.[0] !== "string") throw new Error("Sarvam TTS returned no audio.");
+    audioBytes = Uint8Array.from(atob(data.audios[0]), ch => ch.charCodeAt(0));
+  }
+  if (audioBytes.length < 1000) throw new Error("Voice generation returned no usable audio.");
+  const audioKey = `generated/${safeBrand}/reels/${plan.id}-voice.${plan.language === "English" ? "mp3" : "wav"}`;
+  await env.ASSETS.put(audioKey, audioBytes, { httpMetadata: { contentType: plan.language === "English" ? "audio/mpeg" : "audio/wav" }, customMetadata: { planId: plan.id, source: "autonomous-content-engine" } });
+  const audioUrl = `${origin}/api/autoposter/assets/${encodeURIComponent(audioKey)}`;
+  const rendered = await renderReelInContainer(env, { planId: plan.id, scenes: plan.scenes.map((s, i) => ({ imageUrl: sceneUrls[i], durationSeconds: s.durationSeconds, caption: s.captionOverlayText })), audioUrl });
+  const videoKey = `generated/${safeBrand}/reels/${plan.id}.mp4`;
+  await env.ASSETS.put(videoKey, rendered, { httpMetadata: { contentType: "video/mp4", cacheControl: "public, max-age=31536000, immutable" }, customMetadata: { planId: plan.id, brand: plan.brand, source: "autonomous-content-engine", format: "mp4" } });
+  const head = await env.ASSETS.head(videoKey);
+  if (!head || head.size < 1000 || head.httpMetadata?.contentType !== "video/mp4") throw new Error("Rendered Reel MP4 failed R2 verification.");
+  return `${origin}/api/autoposter/assets/${encodeURIComponent(videoKey)}`;
+}
 /**
  * Autonomous execution for REEL format
  */
@@ -358,33 +400,13 @@ async function executeReelPlan(
     env.DB
   );
 
-  // Step 2: Render or store Reel MP4 Asset in R2
+  // Step 2: Generate scenes, voice, and render a real MP4 in the server-side renderer
   if (!videoUrl || options.forceRegenerate) {
-    if (env.ASSETS) {
-      const safeBrand = plan.brand.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-      const videoKey = `generated/${safeBrand}/reel-${plan.id}.mp4`;
-      // Check if video already exists in R2
-      const existingObj = await env.ASSETS.get(videoKey);
-      if (existingObj) {
-        videoUrl = `${reqMock.url}/api/autoposter/assets/${encodeURIComponent(videoKey)}`;
-      } else {
-        // Create registered video placeholder / asset manifest in R2
-        const dummyMp4Header = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109]);
-        await env.ASSETS.put(videoKey, dummyMp4Header, {
-          httpMetadata: { contentType: "video/mp4" },
-          customMetadata: { planId: plan.id, brand: plan.brand, title: plan.title }
-        });
-        videoUrl = `${reqMock.url}/api/autoposter/assets/${encodeURIComponent(videoKey)}`;
-      }
-    } else {
-      videoUrl = `${reqMock.url}/api/autoposter/assets/generated/${plan.brand.toLowerCase()}/reel-${plan.id}.mp4`;
-    }
-
+    await transitionJobState(job.id, "GENERATING", "RENDER_REEL", "Generating scenes, voice and production MP4", {}, env.DB);
+    videoUrl = await renderAutonomousReel(plan, env, reqMock.url);
     plan.generatedVideoUrl = videoUrl;
-    updatePlan(plan.id, { generatedVideoUrl: videoUrl });
-    if (env.DB) {
-      await updatePlanInD1(plan.id, { generatedVideoUrl: videoUrl }, env.DB);
-    }
+    updatePlan(plan.id, { generatedVideoUrl: videoUrl, status: "GENERATED" });
+    if (env.DB) await updatePlanInD1(plan.id, { generatedVideoUrl: videoUrl, status: "GENERATED" }, env.DB);
   }
 
   // Step 3: Quality Gate Evaluation
