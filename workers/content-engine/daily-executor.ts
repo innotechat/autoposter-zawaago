@@ -72,6 +72,16 @@ export async function executePlanItem(
     };
   }
 
+  // Durable idempotency: once an item is scheduled, do not regenerate or overwrite it on every cron tick.
+  if (plan.status === "SCHEDULED") {
+    return {
+      ok: true, planId: plan.id, brand: plan.brand, format: plan.format,
+      stage: "ALREADY_SCHEDULED", status: "SCHEDULED", scheduledAt: plan.scheduledFor,
+      mediaUrl: (plan as any).generatedImageUrl || (plan as any).generatedVideoUrl,
+      message: "Skipping already scheduled content."
+    };
+  }
+
   // Idempotency Guard: Never duplicate Facebook publishing
   if (
     plan.status === "PUBLISHED" ||
