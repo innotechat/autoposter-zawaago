@@ -264,6 +264,8 @@ async function executePostPlan(
 
   const qualityResult = evaluateContentQuality({
     plan,
+    generatedCaption: caption,
+    generatedImageUrl: imageUrl,
     freshnessScore: 0.95
   });
   plan.qualityScore = qualityResult.overallScore;
@@ -277,6 +279,13 @@ async function executePostPlan(
       {},
       env.DB
     );
+  }
+
+  if (!qualityResult.passed) {
+    await transitionJobState(job.id, "FAILED", "QUALITY_GATE_FAILED", qualityResult.retryDirective?.reason || "Generated content failed Quality Gate.", { errorMessage: "Quality Gate failed", retryCount: job.retryCount + 1 }, env.DB);
+    updatePlan(plan.id, { status: "FAILED", qualityScore: plan.qualityScore });
+    if (env.DB) await updatePlanInD1(plan.id, { status: "FAILED", qualityScore: plan.qualityScore }, env.DB);
+    return { ok: false, planId: plan.id, brand: plan.brand, format: plan.format, stage: "QUALITY_GATE", status: "FAILED", caption: plan.format === "POST" ? caption : undefined, mediaUrl: plan.format === "POST" ? imageUrl : videoUrl, qualityScore: plan.qualityScore, error: qualityResult.retryDirective?.reason || "Quality Gate failed." };
   }
 
   // Step 4: Ready State
@@ -429,9 +438,17 @@ async function executeReelPlan(
 
   const qualityResult = evaluateContentQuality({
     plan,
+    generatedScenes: plan.scenes.map((s, i) => ({ sceneNumber: i + 1, narration: s.narration, imageUrl: s.imageUrl })),
     freshnessScore: 0.95
   });
   plan.qualityScore = qualityResult.overallScore;
+
+  if (!qualityResult.passed) {
+    await transitionJobState(job.id, "FAILED", "QUALITY_GATE_FAILED", qualityResult.retryDirective?.reason || "Generated content failed Quality Gate.", { errorMessage: "Quality Gate failed", retryCount: job.retryCount + 1 }, env.DB);
+    updatePlan(plan.id, { status: "FAILED", qualityScore: plan.qualityScore });
+    if (env.DB) await updatePlanInD1(plan.id, { status: "FAILED", qualityScore: plan.qualityScore }, env.DB);
+    return { ok: false, planId: plan.id, brand: plan.brand, format: plan.format, stage: "QUALITY_GATE", status: "FAILED", caption: plan.format === "POST" ? caption : undefined, mediaUrl: plan.format === "POST" ? imageUrl : videoUrl, qualityScore: plan.qualityScore, error: qualityResult.retryDirective?.reason || "Quality Gate failed." };
+  }
 
   // Step 4: Ready State
   plan.status = "READY";
