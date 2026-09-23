@@ -71,7 +71,7 @@ const server = http.createServer(async (req, res) => {
         const duration = Math.max(1, Number(scene.durationSeconds || 5));
         const caption = esc(scene.caption || "");
         filters.push(
-          `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1,zoompan=z='min(zoom+0.0006,1.08)':d=${Math.max(1, Math.round(duration * fps))}:s=${width}x${height}:fps=${fps},drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='${caption}':fontcolor=white:fontsize=27:line_spacing=8:x=(w-text_w)/2:y=h-150:box=1:boxcolor=black@0.45:boxborderw=18[v${i}]`
+          `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1,zoompan=z='min(zoom+0.0006,1.08)':d=${Math.max(1, Math.round(duration * fps))}:s=${width}x${height}:fps=${fps},drawtext=fontfile=/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf:text='${caption}':fontcolor=white:fontsize=27:line_spacing=8:x=(w-text_w)/2:y=h-150:box=1:boxcolor=black@0.45:boxborderw=18[v${i}]`
         );
       }
       const concatInputs = manifest.scenes.map((_, i) => `[v${i}]`).join("");
