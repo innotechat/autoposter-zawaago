@@ -255,6 +255,28 @@ apiRoutes.post("/autoposter/generate", async (c) => {
   }
 });
 
+export async function generateProductionImage(env: Env, brief: Brief, request: Request): Promise<{ imageUrl: string; prompt: string }> {
+  normalizePage(brief.pageName);
+  const finalPrompt = buildImagePrompt(brief);
+  let lastImageError = "";
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const result: any = await env.AI.run("@cf/black-forest-labs/flux-1-schnell" as any, { prompt: finalPrompt, steps: 8 });
+      const bytes = imageBytesFromResult(result);
+      if (!bytes || bytes.length <= 1000) {
+        lastImageError = "Cloudflare Flux returned no usable image.";
+        continue;
+      }
+      const imageUrl = await storeImage(env, bytes, request, brief.pageName);
+      return { imageUrl, prompt: finalPrompt };
+    } catch (error) {
+      lastImageError = error instanceof Error ? error.message : String(error);
+      console.warn(`Cloudflare Flux image attempt ${attempt} failed`, error);
+    }
+  }
+  throw new Error(lastImageError || "Cloudflare Flux could not generate a usable image after 3 attempts.");
+}
+
 apiRoutes.post("/autoposter/generate-image", async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
@@ -272,33 +294,8 @@ apiRoutes.post("/autoposter/generate-image", async (c) => {
       cta: String(body.cta || "None").trim(),
       customPrompt: String(body.imgPrompt || body.customPrompt || "").trim(),
     };
-    normalizePage(brief.pageName);
-    const finalPrompt = buildImagePrompt(brief);
-    let lastImageError = "";
-
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        const result: any = await c.env.AI.run("@cf/black-forest-labs/flux-1-schnell" as any, {
-          prompt: finalPrompt,
-          steps: 8,
-        });
-        const bytes = imageBytesFromResult(result);
-        if (!bytes || bytes.length <= 1000) {
-          lastImageError = "Cloudflare Flux returned no usable image.";
-          continue;
-        }
-        const imageUrl = await storeImage(c.env, bytes, c.req.raw, brief.pageName);
-        return c.json({ imageUrl, prompt: finalPrompt, source: "cloudflare-flux-r2", quality: "production", watermark: "none" });
-      } catch (error) {
-        lastImageError = error instanceof Error ? error.message : String(error);
-        console.warn(`Cloudflare Flux image attempt ${attempt} failed`, error);
-      }
-    }
-
-    return c.json({
-      error: "Image generation failed",
-      details: lastImageError || "Cloudflare Flux could not generate a usable image after 3 attempts.",
-    }, 503);
+    const generated = await generateProductionImage(c.env, brief, c.req.raw);
+    return c.json({ ...generated, source: "cloudflare-flux-r2", quality: "production", watermark: "none" });
   } catch (error) {
     return c.json({ error: "Image generation failed", details: error instanceof Error ? error.message : String(error) }, 500);
   }
