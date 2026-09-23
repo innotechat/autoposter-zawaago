@@ -19,7 +19,7 @@
     "react": "19.2.1",
     "react-dom": "19.2.1",
     "react-router": "7.9.6",
-    "@cloudflare/containers": "^0.3.0"
+    "@cloudflare/containers": "^0.3.7"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.54.6",
