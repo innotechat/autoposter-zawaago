@@ -1,7 +1,7 @@
 import type { ContentJob, JobStatus, PostPlan, ReelPlan, UnifiedContentPlan } from "./types";
 import { evaluateContentQuality } from "./quality-gate";
 import { buildCaptionPrompt, buildImagePrompt } from "./prompt-engine";
-import { transitionJobState, getJob } from "./job-orchestrator";
+import { transitionJobState, getJob, createContentJob } from "./job-orchestrator";
 import { updatePlan, getPlanById } from "./autonomous-planner";
 import { savePlanToD1, updatePlanInD1, getPlanFromD1 } from "./db";
 import {
