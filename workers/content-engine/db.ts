@@ -151,6 +151,9 @@ export async function ensureContentEngineTables(db?: D1DatabaseLike): Promise<bo
       )
       .run();
 
+    await db.prepare(`CREATE TABLE IF NOT EXISTS content_engine_config (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT DEFAULT (datetime('now')))`).run();
+    await db.prepare(`INSERT OR IGNORE INTO content_engine_config (key, value) VALUES ('automation_enabled', 'true')`).run();
+
     // Create Indexes
     await db.prepare(`CREATE INDEX IF NOT EXISTS idx_plans_brand_date ON content_plans(brand, scheduled_for)`).run();
     await db.prepare(`CREATE INDEX IF NOT EXISTS idx_plans_status ON content_plans(status)`).run();
@@ -406,5 +409,34 @@ export async function loadJobsFromD1(db?: D1DatabaseLike, brand?: string): Promi
   } catch (err) {
     console.warn("loadJobsFromD1 warning:", err);
     return [];
+  }
+}
+
+
+export async function getAutomationEnabled(db?: D1DatabaseLike): Promise<boolean> {
+  if (!db) return true;
+  try {
+    const row = await db.prepare("SELECT value FROM content_engine_config WHERE key = 'automation_enabled'").first<{ value: string }>();
+    return row?.value !== "false";
+  } catch {
+    return true;
+  }
+}
+
+export async function setAutomationEnabledD1(enabled: boolean, db?: D1DatabaseLike): Promise<void> {
+  if (!db) return;
+  await db.prepare("INSERT INTO content_engine_config (key, value, updated_at) VALUES ('automation_enabled', ?, datetime('now')) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at").bind(String(enabled)).run();
+}
+
+export async function getActiveTenDayBatch(db?: D1DatabaseLike, startDate?: string): Promise<{ batchId: string; startDate: string; endDate: string; planCount: number } | null> {
+  if (!db) return null;
+  const date = startDate || new Date().toISOString().slice(0, 10);
+  try {
+    const row = await db.prepare(
+      "SELECT plan_batch_id AS batchId, MIN(substr(scheduled_for,1,10)) AS startDate, MAX(substr(scheduled_for,1,10)) AS endDate, COUNT(*) AS planCount FROM content_plans WHERE plan_batch_id IS NOT NULL GROUP BY plan_batch_id HAVING endDate >= ? ORDER BY endDate DESC LIMIT 1"
+    ).bind(date).first<{ batchId: string; startDate: string; endDate: string; planCount: number }>();
+    return row || null;
+  } catch {
+    return null;
   }
 }

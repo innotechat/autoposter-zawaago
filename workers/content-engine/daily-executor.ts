@@ -1,7 +1,7 @@
 import type { ContentJob, JobStatus, PostPlan, ReelPlan, UnifiedContentPlan } from "./types";
 import { evaluateContentQuality } from "./quality-gate";
 import { buildCaptionPrompt, buildImagePrompt } from "./prompt-engine";
-import { transitionJobState, getJob } from "./job-orchestrator";
+import { transitionJobState, getJob, createContentJob } from "./job-orchestrator";
 import { updatePlan, getPlanById } from "./autonomous-planner";
 import { savePlanToD1, updatePlanInD1, getPlanFromD1 } from "./db";
 import {
@@ -12,9 +12,12 @@ import {
   postImageToFacebook,
   postToFacebook,
   storeImage,
+  generateProductionImage,
   type Brief
 } from "../api";
 import { publishFacebookReel } from "../reels";
+import { synthesizeReelNarration } from "../reel-lab";
+import { renderReelInContainer } from "../reel-renderer";
 import { writeHistory, sanitizeHistoryError } from "../history";
 
 export interface ExecutionOptions {
@@ -71,6 +74,16 @@ export async function executePlanItem(
     };
   }
 
+  // Durable idempotency: once an item is scheduled, do not regenerate or overwrite it on every cron tick.
+  if (plan.status === "SCHEDULED") {
+    return {
+      ok: true, planId: plan.id, brand: plan.brand, format: plan.format,
+      stage: "ALREADY_SCHEDULED", status: "SCHEDULED", scheduledAt: plan.scheduledFor,
+      mediaUrl: (plan as any).generatedImageUrl || (plan as any).generatedVideoUrl,
+      message: "Skipping already scheduled content."
+    };
+  }
+
   // Idempotency Guard: Never duplicate Facebook publishing
   if (
     plan.status === "PUBLISHED" ||
@@ -92,19 +105,14 @@ export async function executePlanItem(
     };
   }
 
-  const job = getJob(`job-${plan.id}`) || {
-    id: `job-${plan.id}`,
-    planId: plan.id,
-    brand: plan.brand,
-    format: plan.format,
-    state: plan.status,
-    retryCount: 0,
-    maxRetries: 3,
-    currentStep: "EXECUTING",
-    logs: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
+  const job = await createContentJob(plan, env.DB);
+  if (job.state === "FAILED" && job.retryCount >= job.maxRetries && !options.forceRegenerate) {
+    return {
+      ok: false, planId: plan.id, brand: plan.brand, format: plan.format,
+      stage: "RETRY_LIMIT", status: "FAILED",
+      error: "Retry limit reached for job " + job.id + " (" + job.retryCount + "/" + job.maxRetries + ")."
+    };
+  }
 
   try {
     if (plan.format === "POST") {
@@ -183,17 +191,10 @@ async function executePostPlan(
       customPrompt: plan.hook
     };
 
-    if (env.AI) {
-      try {
-        const genRes = await generateCaption(env, brief);
-        caption = genRes.caption;
-      } catch (aiErr) {
-        console.warn("AI caption generation warning:", aiErr);
-        caption = `${plan.hook}\n\n${plan.captionBrief}\n\nKey Takeaway: ${plan.topic} is changing how we approach modern business automation.\n\n${plan.cta}\n\n#${plan.brand} #${plan.pillar.replace(/[^a-zA-Z0-9]/g, "")}`;
-      }
-    } else {
-      caption = `${plan.hook}\n\n${plan.captionBrief}\n\nKey Takeaway: Actionable efficiency through intelligent automation.\n\n${plan.cta}\n\n#${plan.brand} #${plan.pillar.replace(/[^a-zA-Z0-9]/g, "")}`;
-    }
+    if (!env.AI) throw new Error("Workers AI is required for autonomous caption generation.");
+    const genRes = await generateCaption(env, brief);
+    caption = String(genRes.caption || "").trim();
+    if (!caption) throw new Error("AI caption generation returned an empty caption.");
 
     plan.generatedCaption = caption;
     updatePlan(plan.id, { generatedCaption: caption });
@@ -213,34 +214,31 @@ async function executePostPlan(
       env.DB
     );
 
-    const imgPrompt = buildImagePrompt(plan.creativeDirection, plan.brand);
-
-    if (env.AI && env.ASSETS) {
-      try {
-        const aiResult: any = await env.AI.run("@cf/black-forest-labs/flux-1-schnell" as any, {
-          prompt: imgPrompt,
-          steps: 8
-        });
-        const bytes = imageBytesFromResult(aiResult);
-        if (bytes && bytes.length > 1000) {
-          imageUrl = await storeImage(env, bytes, reqMock, plan.brand);
-        }
-      } catch (imgErr) {
-        console.warn("AI image generation warning:", imgErr);
-      }
+    if (!env.AI || !env.ASSETS) {
+      throw new Error("Workers AI and R2 are required for autonomous Post image generation.");
     }
 
-    // Fallback image if AI not available in current test/offline container
-    if (!imageUrl) {
-      const safeBrand = plan.brand.toLowerCase();
-      imageUrl = `${reqMock.url}/api/autoposter/assets/generated/${safeBrand}/placeholder-${plan.id}.jpg`;
-    }
+    const brief: Brief = {
+      topic: `${plan.topic} (${plan.angle})`,
+      pageName: plan.brand,
+      contentType: plan.pillar,
+      tone: plan.language.toLowerCase().includes("hinglish") ? "Professional Hinglish" : "Professional English",
+      language: plan.language,
+      audience: plan.targetAudience,
+      visualStyle: plan.creativeDirection.visualFamily,
+      aspectRatio: plan.creativeDirection.aspectRatio,
+      branding: plan.creativeDirection.brandingTreatment,
+      logoPosition: "Bottom Right",
+      cta: plan.cta,
+      customPrompt: plan.creativeDirection.promptOutput
+    };
+
+    const generated = await generateProductionImage(env, brief, reqMock);
+    imageUrl = generated.imageUrl;
 
     plan.generatedImageUrl = imageUrl;
     updatePlan(plan.id, { generatedImageUrl: imageUrl });
-    if (env.DB) {
-      await updatePlanInD1(plan.id, { generatedImageUrl: imageUrl }, env.DB);
-    }
+    await updatePlanInD1(plan.id, { generatedImageUrl: imageUrl }, env.DB);
   }
 
   // Step 3: Quality Gate Evaluation
@@ -255,27 +253,41 @@ async function executePostPlan(
 
   const qualityResult = evaluateContentQuality({
     plan,
+    generatedCaption: caption,
+    generatedImageUrl: imageUrl,
     freshnessScore: 0.95
   });
   plan.qualityScore = qualityResult.overallScore;
 
-  if (!qualityResult.passed && qualityResult.overallScore < 6.0) {
+  if (!qualityResult.passed) {
     await transitionJobState(
       job.id,
-      "QUALITY_CHECK",
-      "QUALITY_GATE_WARNING",
-      `Quality check flagged low score (${qualityResult.overallScore.toFixed(1)}/10)`,
-      {},
+      "FAILED",
+      "QUALITY_GATE_FAILED",
+      qualityResult.retryDirective?.reason || "Generated Post failed Quality Gate.",
+      { errorMessage: "Quality Gate failed", retryCount: job.retryCount + 1 },
       env.DB
     );
+    updatePlan(plan.id, { status: "FAILED", qualityScore: plan.qualityScore });
+    await updatePlanInD1(plan.id, { status: "FAILED", qualityScore: plan.qualityScore }, env.DB);
+    return {
+      ok: false,
+      planId: plan.id,
+      brand: plan.brand,
+      format: "POST",
+      stage: "QUALITY_GATE",
+      status: "FAILED",
+      caption,
+      mediaUrl: imageUrl,
+      qualityScore: plan.qualityScore,
+      error: qualityResult.retryDirective?.reason || "Generated Post failed Quality Gate."
+    };
   }
 
   // Step 4: Ready State
   plan.status = "READY";
   updatePlan(plan.id, { status: "READY", qualityScore: plan.qualityScore });
-  if (env.DB) {
-    await updatePlanInD1(plan.id, { status: "READY", qualityScore: plan.qualityScore }, env.DB);
-  }
+  await updatePlanInD1(plan.id, { status: "READY", qualityScore: plan.qualityScore }, env.DB);
 
   // Step 5: Schedule or Publish Now
   const shouldPublishImmediately =
@@ -283,57 +295,133 @@ async function executePostPlan(
 
   if (shouldPublishImmediately) {
     return await publishPostToFacebook(plan, job, env, reqMock, caption, imageUrl);
-  } else {
-    // Schedule for configured time
-    await transitionJobState(
-      job.id,
-      "SCHEDULED",
-      "SCHEDULED",
-      `Post scheduled for ${plan.scheduledFor}`,
-      { caption, assetUrl: imageUrl },
-      env.DB
-    );
-    plan.status = "SCHEDULED";
-    updatePlan(plan.id, { status: "SCHEDULED" });
-    if (env.DB) {
-      await updatePlanInD1(plan.id, { status: "SCHEDULED" }, env.DB);
-    }
+  }
 
-    // Persist in scheduler queue
-    if (env.ASSETS) {
-      try {
-        const scheduleRecord = {
-          id: plan.id,
-          pageName: plan.brand,
-          caption,
-          imageUrl,
-          withImage: Boolean(imageUrl && !imageUrl.includes("placeholder")),
-          scheduledAt: plan.scheduledFor,
-          status: "scheduled",
-          createdAt: new Date().toISOString()
-        };
-        await env.ASSETS.put(`schedules/${plan.id}.json`, JSON.stringify(scheduleRecord), {
-          httpMetadata: { contentType: "application/json" }
-        });
-      } catch (schedErr) {
-        console.warn("Scheduler save warning:", schedErr);
-      }
-    }
+  await transitionJobState(
+    job.id,
+    "SCHEDULED",
+    "SCHEDULED",
+    `Post scheduled for ${plan.scheduledFor}`,
+    { caption, assetUrl: imageUrl },
+    env.DB
+  );
 
-    return {
-      ok: true,
+  plan.status = "SCHEDULED";
+  updatePlan(plan.id, { status: "SCHEDULED" });
+  await updatePlanInD1(plan.id, { status: "SCHEDULED" }, env.DB);
+
+  if (!env.ASSETS) throw new Error("R2 asset storage is required for scheduled Post publishing.");
+
+  try {
+    const scheduleRecord = {
+      id: plan.id,
+      pageName: plan.brand,
+      caption,
+      imageUrl,
+      withImage: true,
+      scheduledAt: plan.scheduledFor,
+      status: "scheduled",
+      createdAt: new Date().toISOString()
+    };
+    await env.ASSETS.put(`schedules/${plan.id}.json`, JSON.stringify(scheduleRecord), {
+      httpMetadata: { contentType: "application/json" }
+    });
+  } catch (schedErr) {
+    throw new Error(`Post scheduler persistence failed: ${schedErr instanceof Error ? schedErr.message : String(schedErr)}`);
+  }
+
+  return {
+    ok: true,
+    planId: plan.id,
+    brand: plan.brand,
+    format: "POST",
+    stage: "SCHEDULED",
+    status: "SCHEDULED",
+    caption,
+    mediaUrl: imageUrl,
+    qualityScore: plan.qualityScore,
+    scheduledAt: plan.scheduledFor,
+    message: `Post successfully generated, quality-checked and scheduled for ${plan.scheduledFor}.`
+  };
+}
+
+async function renderAutonomousReel(
+  plan: ReelPlan,
+  env: any,
+  origin: string
+): Promise<string> {
+  if (!env.AI || !env.ASSETS) throw new Error("Workers AI and R2 are required for autonomous Reel rendering.");
+
+  const safeBrand = plan.brand.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  const sceneUrls: string[] = [];
+
+  for (const scene of plan.scenes) {
+    const sceneBrief: Brief = {
+      topic: `${plan.topic} · scene ${scene.sceneNumber}`,
+      pageName: plan.brand,
+      contentType: "Educational Reel Scene",
+      tone: plan.language.toLowerCase().includes("hinglish") ? "Professional Hinglish" : "Professional English",
+      language: plan.language,
+      audience: plan.targetAudience,
+      visualStyle: scene.visualFamily,
+      aspectRatio: "9:16",
+      branding: "No branding",
+      logoPosition: "Bottom Right",
+      cta: "None",
+      customPrompt: `${scene.visualPrompt} Clean artwork only. No text, logos, letters, numbers, subtitles or watermarks. Designed for a vertical 9:16 educational Reel.`
+    };
+
+    const generated = await generateProductionImage(env, sceneBrief, { url: origin } as Request);
+    if (!generated.imageUrl) throw new Error(`Scene ${scene.sceneNumber} image generation returned no URL.`);
+    scene.imageUrl = generated.imageUrl;
+    sceneUrls.push(generated.imageUrl);
+  }
+
+  const narration = plan.scenes.map((scene) => scene.narration).join(" ").trim();
+  if (!narration) throw new Error("Reel narration is empty.");
+
+  const tts = await synthesizeReelNarration(env, narration, plan.language, "shubh");
+  if (tts.bytes.length < 1000) throw new Error("Voice generation returned no usable audio.");
+
+  const audioKey = `generated/${safeBrand}/reels/${plan.id}-voice.${tts.contentType === "audio/mpeg" ? "mp3" : "wav"}`;
+  await env.ASSETS.put(audioKey, tts.bytes, {
+    httpMetadata: { contentType: tts.contentType },
+    customMetadata: { planId: plan.id, source: "autonomous-content-engine" }
+  });
+
+  const audioUrl = `${origin}/api/autoposter/assets/${encodeURIComponent(audioKey)}`;
+  const rendered = await renderReelInContainer(env, {
+    planId: plan.id,
+    scenes: plan.scenes.map((scene, index) => ({
+      imageUrl: sceneUrls[index],
+      durationSeconds: scene.durationSeconds,
+      caption: scene.captionOverlayText
+    })),
+    audioUrl
+  });
+
+  if (rendered.length < 1000) throw new Error("Reel renderer returned an unexpectedly small MP4.");
+
+  const videoKey = `generated/${safeBrand}/reels/${plan.id}.mp4`;
+  await env.ASSETS.put(videoKey, rendered, {
+    httpMetadata: {
+      contentType: "video/mp4",
+      cacheControl: "public, max-age=31536000, immutable"
+    },
+    customMetadata: {
       planId: plan.id,
       brand: plan.brand,
-      format: "POST",
-      stage: "SCHEDULED",
-      status: "SCHEDULED",
-      caption,
-      mediaUrl: imageUrl,
-      qualityScore: plan.qualityScore,
-      scheduledAt: plan.scheduledFor,
-      message: `Post successfully planned, generated, verified and scheduled for ${plan.scheduledFor}.`
-    };
+      source: "autonomous-content-engine",
+      format: "mp4"
+    }
+  });
+
+  const head = await env.ASSETS.head(videoKey);
+  if (!head || head.size < 1000 || head.httpMetadata?.contentType !== "video/mp4") {
+    throw new Error("Rendered Reel MP4 failed R2 verification.");
   }
+
+  return `${origin}/api/autoposter/assets/${encodeURIComponent(videoKey)}`;
 }
 
 /**
@@ -358,33 +446,13 @@ async function executeReelPlan(
     env.DB
   );
 
-  // Step 2: Render or store Reel MP4 Asset in R2
+  // Step 2: Generate scenes, voice, and render a real MP4 in the server-side renderer
   if (!videoUrl || options.forceRegenerate) {
-    if (env.ASSETS) {
-      const safeBrand = plan.brand.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-      const videoKey = `generated/${safeBrand}/reel-${plan.id}.mp4`;
-      // Check if video already exists in R2
-      const existingObj = await env.ASSETS.get(videoKey);
-      if (existingObj) {
-        videoUrl = `${reqMock.url}/api/autoposter/assets/${encodeURIComponent(videoKey)}`;
-      } else {
-        // Create registered video placeholder / asset manifest in R2
-        const dummyMp4Header = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109]);
-        await env.ASSETS.put(videoKey, dummyMp4Header, {
-          httpMetadata: { contentType: "video/mp4" },
-          customMetadata: { planId: plan.id, brand: plan.brand, title: plan.title }
-        });
-        videoUrl = `${reqMock.url}/api/autoposter/assets/${encodeURIComponent(videoKey)}`;
-      }
-    } else {
-      videoUrl = `${reqMock.url}/api/autoposter/assets/generated/${plan.brand.toLowerCase()}/reel-${plan.id}.mp4`;
-    }
-
+    await transitionJobState(job.id, "GENERATING", "RENDER_REEL", "Generating scenes, voice and production MP4", {}, env.DB);
+    videoUrl = await renderAutonomousReel(plan, env, reqMock.url);
     plan.generatedVideoUrl = videoUrl;
-    updatePlan(plan.id, { generatedVideoUrl: videoUrl });
-    if (env.DB) {
-      await updatePlanInD1(plan.id, { generatedVideoUrl: videoUrl }, env.DB);
-    }
+    updatePlan(plan.id, { generatedVideoUrl: videoUrl, status: "GENERATED" });
+    if (env.DB) await updatePlanInD1(plan.id, { generatedVideoUrl: videoUrl, status: "GENERATED" }, env.DB);
   }
 
   // Step 3: Quality Gate Evaluation
@@ -399,9 +467,17 @@ async function executeReelPlan(
 
   const qualityResult = evaluateContentQuality({
     plan,
+    generatedScenes: plan.scenes.map((s, i) => ({ sceneNumber: i + 1, narration: s.narration, imageUrl: s.imageUrl })),
     freshnessScore: 0.95
   });
   plan.qualityScore = qualityResult.overallScore;
+
+  if (!qualityResult.passed) {
+    await transitionJobState(job.id, "FAILED", "QUALITY_GATE_FAILED", qualityResult.retryDirective?.reason || "Generated content failed Quality Gate.", { errorMessage: "Quality Gate failed", retryCount: job.retryCount + 1 }, env.DB);
+    updatePlan(plan.id, { status: "FAILED", qualityScore: plan.qualityScore });
+    if (env.DB) await updatePlanInD1(plan.id, { status: "FAILED", qualityScore: plan.qualityScore }, env.DB);
+    return { ok: false, planId: plan.id, brand: plan.brand, format: "REEL", stage: "QUALITY_GATE", status: "FAILED", mediaUrl: videoUrl, qualityScore: plan.qualityScore, error: qualityResult.retryDirective?.reason || "Quality Gate failed." };
+  }
 
   // Step 4: Ready State
   plan.status = "READY";
@@ -432,7 +508,8 @@ async function executeReelPlan(
       await updatePlanInD1(plan.id, { status: "SCHEDULED" }, env.DB);
     }
 
-    if (env.ASSETS) {
+    if (!env.ASSETS) throw new Error("R2 asset storage is required for scheduled Reel publishing.");
+    {
       try {
         const scheduleRecord = {
           id: plan.id,
@@ -450,7 +527,7 @@ async function executeReelPlan(
           httpMetadata: { contentType: "application/json" }
         });
       } catch (schedErr) {
-        console.warn("Scheduler Reel save warning:", schedErr);
+        throw new Error(`Reel scheduler persistence failed: ${schedErr instanceof Error ? schedErr.message : String(schedErr)}`);
       }
     }
 
@@ -518,6 +595,7 @@ async function publishPostToFacebook(
       const fbRes = await postToFacebook(caption, pageConfig.id, pageToken);
       fbPostId = String(fbRes.id || "");
     }
+    if (!fbPostId) throw new Error("Facebook Post API returned no publication ID.");
   } catch (fbErr: any) {
     const errorMsg = fbErr instanceof Error ? fbErr.message : String(fbErr);
     // If Facebook tokens are missing or mock in local development environment, record graceful simulation
@@ -529,8 +607,7 @@ async function publishPostToFacebook(
       errorMsg.includes("401") ||
       errorMsg.includes("403")
     ) {
-      console.warn("Facebook API publish notice (simulated publish record):", errorMsg);
-      fbPostId = `fb-sim-${plan.brand.toLowerCase()}-${Date.now()}`;
+      throw new Error(`Facebook Post publish failed: ${errorMsg}`);
     } else {
       throw fbErr;
     }
@@ -639,6 +716,7 @@ async function publishReelToFacebook(
   try {
     const result = await publishFacebookReel(env, plan.brand as any, videoUrl, caption, plan.title);
     fbVideoId = String(result.videoId || "");
+    if (!fbVideoId) throw new Error("Facebook Reel API returned no publication ID.");
   } catch (reelErr: any) {
     const errorMsg = reelErr instanceof Error ? reelErr.message : String(reelErr);
     if (
@@ -647,8 +725,7 @@ async function publishReelToFacebook(
       errorMsg.includes("upload failed") ||
       errorMsg.includes("fetch failed")
     ) {
-      console.warn("Facebook Reel publish notice (simulated publish record):", errorMsg);
-      fbVideoId = `fb-reel-sim-${plan.brand.toLowerCase()}-${Date.now()}`;
+      throw new Error(`Facebook Reel publish failed: ${errorMsg}`);
     } else {
       throw reelErr;
     }

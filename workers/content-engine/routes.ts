@@ -2,10 +2,11 @@ import { Hono } from "hono";
 import {
   generateDailyPlan,
   generateTenDayPlan,
+  ensureTenDayPlan,
+  isAutomationEnabledDurable,
+  setAutomationEnabledDurable,
   getPlanById,
-  isAutomationEnabled,
   listPlans,
-  setAutomationEnabled,
   simulateSchedule,
   syncPlansWithD1,
   updatePlan
@@ -54,7 +55,7 @@ contentEngineRoutes.get("/content-engine/status", async (c) => {
 
   return c.json({
     ok: true,
-    automationEnabled: isAutomationEnabled(),
+    automationEnabled: await isAutomationEnabledDurable(c.env.DB),
     brandsCount: brands.length,
     activeBrands: brands.map((b) => ({ name: b.name, handle: b.handle, mission: b.mission })),
     plansCount: plans.length,
@@ -93,7 +94,7 @@ contentEngineRoutes.post("/content-engine/simulate", async (c) => {
  */
 contentEngineRoutes.post("/content-engine/plan-10-days", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { startDate?: string; brands?: string[] };
-  const result = await generateTenDayPlan({
+  const result = await ensureTenDayPlan({
     startDate: body.startDate,
     brands: body.brands || ["Zawaago", "InnoTech"],
     db: c.env.DB,

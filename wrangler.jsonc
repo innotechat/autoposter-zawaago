@@ -6,6 +6,24 @@
   "upload_source_maps": true,
   "observability": { "enabled": true },
   "triggers": { "crons": ["* * * * *"] },
+  "containers": [
+    {
+      "class_name": "ReelRenderer",
+      "image": "./container/reel-renderer/Dockerfile",
+      "image_build_context": "./container/reel-renderer",
+      "name": "autoposter-reel-renderer",
+      "instance_type": "basic",
+      "max_instances": 2
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "REEL_RENDERER", "class_name": "ReelRenderer" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ReelRenderer"] }
+  ],
   "ai": { "binding": "AI" },
   "r2_buckets": [
     {

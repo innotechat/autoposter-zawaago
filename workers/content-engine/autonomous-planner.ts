@@ -20,7 +20,7 @@ import {
   type R2BucketLike
 } from "./content-memory";
 import { createContentJob } from "./job-orchestrator";
-import { getPlanFromD1, loadPlansFromD1, savePlanToD1, updatePlanInD1 } from "./db";
+import { getPlanFromD1, loadPlansFromD1, savePlanToD1, updatePlanInD1, getActiveTenDayBatch, getAutomationEnabled, setAutomationEnabledD1 } from "./db";
 
 // System automation toggle
 let AUTOMATION_ENABLED = true;
@@ -585,4 +585,31 @@ export async function simulateSchedule(
       overallVisualDiversityIndex * 100
     ).toFixed(0)}% and zero repetition violations.`
   };
+}
+
+
+export async function ensureTenDayPlan(options: {
+  startDate?: string;
+  brands?: string[];
+  db?: D1DatabaseLike;
+  assets?: R2BucketLike;
+} = {}): Promise<TenDayPlanResult & { reused: boolean }> {
+  const startDate = options.startDate || new Date().toISOString().slice(0, 10);
+  const active = await getActiveTenDayBatch(options.db, startDate);
+  if (active) {
+    const existingPlans = options.db ? await loadPlansFromD1(options.db) : [];
+    const allPlans = existingPlans.filter((p: any) => p.planBatchId === active.batchId);
+    return {
+      batchId: active.batchId,
+      startDate: active.startDate,
+      endDate: active.endDate,
+      totalDays: 10,
+      totalPlans: allPlans.length,
+      dailyPlans: [],
+      overallVisualDiversityIndex: 0,
+      allPlans,
+      reused: true
+    };
+  }
+  return { ...(await generateTenDayPlan(options)), reused: false };
 }
