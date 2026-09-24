@@ -226,41 +226,216 @@ async function executePostPlan(
       env.DB
     );
 
-    const imgPrompt = buildImagePrompt(plan.creativeDirection, plan.brand);
+    if (!env.AI || !env.ASSETS) {
+      throw new Error("Workers AI and R2 are required for autonomous Post image generation.");
+    }
 
-    if (env.AI && env.ASSETS) {
-      try {
-        const brief: Brief = {
-      topic: `${plan.topic} · scene ${scene.scene}`,
+    const brief: Brief = {
+      topic: `${plan.topic} (${plan.angle})`,
+      pageName: plan.brand,
+      contentType: plan.pillar,
+      tone: plan.language.toLowerCase().includes("hinglish") ? "Professional Hinglish" : "Professional English",
+      language: plan.language,
+      audience: plan.targetAudience,
+      visualStyle: plan.creativeDirection.visualFamily,
+      aspectRatio: plan.creativeDirection.aspectRatio,
+      branding: plan.creativeDirection.brandingTreatment,
+      logoPosition: "Bottom Right",
+      cta: plan.cta,
+      customPrompt: plan.creativeDirection.promptOutput
+    };
+
+    const generated = await generateProductionImage(env, brief, reqMock);
+    imageUrl = generated.imageUrl;
+
+    plan.generatedImageUrl = imageUrl;
+    updatePlan(plan.id, { generatedImageUrl: imageUrl });
+    await updatePlanInD1(plan.id, { generatedImageUrl: imageUrl }, env.DB);
+  }
+
+  // Step 3: Quality Gate Evaluation
+  await transitionJobState(
+    job.id,
+    "QUALITY_CHECK",
+    "QUALITY_GATE",
+    "Evaluating content quality gate standards",
+    { caption, assetUrl: imageUrl },
+    env.DB
+  );
+
+  const qualityResult = evaluateContentQuality({
+    plan,
+    generatedCaption: caption,
+    generatedImageUrl: imageUrl,
+    freshnessScore: 0.95
+  });
+  plan.qualityScore = qualityResult.overallScore;
+
+  if (!qualityResult.passed) {
+    await transitionJobState(
+      job.id,
+      "FAILED",
+      "QUALITY_GATE_FAILED",
+      qualityResult.retryDirective?.reason || "Generated Post failed Quality Gate.",
+      { errorMessage: "Quality Gate failed", retryCount: job.retryCount + 1 },
+      env.DB
+    );
+    updatePlan(plan.id, { status: "FAILED", qualityScore: plan.qualityScore });
+    await updatePlanInD1(plan.id, { status: "FAILED", qualityScore: plan.qualityScore }, env.DB);
+    return {
+      ok: false,
+      planId: plan.id,
+      brand: plan.brand,
+      format: "POST",
+      stage: "QUALITY_GATE",
+      status: "FAILED",
+      caption,
+      mediaUrl: imageUrl,
+      qualityScore: plan.qualityScore,
+      error: qualityResult.retryDirective?.reason || "Generated Post failed Quality Gate."
+    };
+  }
+
+  // Step 4: Ready State
+  plan.status = "READY";
+  updatePlan(plan.id, { status: "READY", qualityScore: plan.qualityScore });
+  await updatePlanInD1(plan.id, { status: "READY", qualityScore: plan.qualityScore }, env.DB);
+
+  // Step 5: Schedule or Publish Now
+  const shouldPublishImmediately =
+    options.publishNow || new Date(plan.scheduledFor).getTime() <= Date.now() + 60_000;
+
+  if (shouldPublishImmediately) {
+    return await publishPostToFacebook(plan, job, env, reqMock, caption, imageUrl);
+  }
+
+  await transitionJobState(
+    job.id,
+    "SCHEDULED",
+    "SCHEDULED",
+    `Post scheduled for ${plan.scheduledFor}`,
+    { caption, assetUrl: imageUrl },
+    env.DB
+  );
+
+  plan.status = "SCHEDULED";
+  updatePlan(plan.id, { status: "SCHEDULED" });
+  await updatePlanInD1(plan.id, { status: "SCHEDULED" }, env.DB);
+
+  if (!env.ASSETS) throw new Error("R2 asset storage is required for scheduled Post publishing.");
+
+  try {
+    const scheduleRecord = {
+      id: plan.id,
+      pageName: plan.brand,
+      caption,
+      imageUrl,
+      withImage: true,
+      scheduledAt: plan.scheduledFor,
+      status: "scheduled",
+      createdAt: new Date().toISOString()
+    };
+    await env.ASSETS.put(`schedules/${plan.id}.json`, JSON.stringify(scheduleRecord), {
+      httpMetadata: { contentType: "application/json" }
+    });
+  } catch (schedErr) {
+    throw new Error(`Post scheduler persistence failed: ${schedErr instanceof Error ? schedErr.message : String(schedErr)}`);
+  }
+
+  return {
+    ok: true,
+    planId: plan.id,
+    brand: plan.brand,
+    format: "POST",
+    stage: "SCHEDULED",
+    status: "SCHEDULED",
+    caption,
+    mediaUrl: imageUrl,
+    qualityScore: plan.qualityScore,
+    scheduledAt: plan.scheduledFor,
+    message: `Post successfully generated, quality-checked and scheduled for ${plan.scheduledFor}.`
+  };
+}
+
+async function renderAutonomousReel(
+  plan: ReelPlan,
+  env: any,
+  origin: string
+): Promise<string> {
+  if (!env.AI || !env.ASSETS) throw new Error("Workers AI and R2 are required for autonomous Reel rendering.");
+
+  const safeBrand = plan.brand.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  const sceneUrls: string[] = [];
+
+  for (const scene of plan.scenes) {
+    const sceneBrief: Brief = {
+      topic: `${plan.topic} · scene ${scene.sceneNumber}`,
       pageName: plan.brand,
       contentType: "Educational Reel Scene",
       tone: plan.language.toLowerCase().includes("hinglish") ? "Professional Hinglish" : "Professional English",
       language: plan.language,
       audience: plan.targetAudience,
-      visualStyle: "Premium Editorial Cinematic",
-      aspectRatio: "Portrait 9:16",
+      visualStyle: scene.visualFamily,
+      aspectRatio: "9:16",
       branding: "No branding",
       logoPosition: "Bottom Right",
       cta: "None",
       customPrompt: `${scene.visualPrompt} Clean artwork only. No text, logos, letters, numbers, subtitles or watermarks. Designed for a vertical 9:16 educational Reel.`
     };
-    const generated = await generateProductionImage(env, brief, { url: origin } as Request);
-    const url = generated.imageUrl;
-    sceneUrls.push(url);
+
+    const generated = await generateProductionImage(env, sceneBrief, { url: origin } as Request);
+    if (!generated.imageUrl) throw new Error(`Scene ${scene.sceneNumber} image generation returned no URL.`);
+    scene.imageUrl = generated.imageUrl;
+    sceneUrls.push(generated.imageUrl);
   }
-  const narration = plan.scenes.map(s => s.narration).join(" ").trim();
+
+  const narration = plan.scenes.map((scene) => scene.narration).join(" ").trim();
+  if (!narration) throw new Error("Reel narration is empty.");
+
   const tts = await synthesizeReelNarration(env, narration, plan.language, "shubh");
   if (tts.bytes.length < 1000) throw new Error("Voice generation returned no usable audio.");
+
   const audioKey = `generated/${safeBrand}/reels/${plan.id}-voice.${tts.contentType === "audio/mpeg" ? "mp3" : "wav"}`;
-  await env.ASSETS.put(audioKey, tts.bytes, { httpMetadata: { contentType: tts.contentType }, customMetadata: { planId: plan.id, source: "autonomous-content-engine" } });
+  await env.ASSETS.put(audioKey, tts.bytes, {
+    httpMetadata: { contentType: tts.contentType },
+    customMetadata: { planId: plan.id, source: "autonomous-content-engine" }
+  });
+
   const audioUrl = `${origin}/api/autoposter/assets/${encodeURIComponent(audioKey)}`;
-  const rendered = await renderReelInContainer(env, { planId: plan.id, scenes: plan.scenes.map((s, i) => ({ imageUrl: sceneUrls[i], durationSeconds: s.durationSeconds, caption: s.captionOverlayText })), audioUrl });
+  const rendered = await renderReelInContainer(env, {
+    planId: plan.id,
+    scenes: plan.scenes.map((scene, index) => ({
+      imageUrl: sceneUrls[index],
+      durationSeconds: scene.durationSeconds,
+      caption: scene.captionOverlayText
+    })),
+    audioUrl
+  });
+
+  if (rendered.length < 1000) throw new Error("Reel renderer returned an unexpectedly small MP4.");
+
   const videoKey = `generated/${safeBrand}/reels/${plan.id}.mp4`;
-  await env.ASSETS.put(videoKey, rendered, { httpMetadata: { contentType: "video/mp4", cacheControl: "public, max-age=31536000, immutable" }, customMetadata: { planId: plan.id, brand: plan.brand, source: "autonomous-content-engine", format: "mp4" } });
+  await env.ASSETS.put(videoKey, rendered, {
+    httpMetadata: {
+      contentType: "video/mp4",
+      cacheControl: "public, max-age=31536000, immutable"
+    },
+    customMetadata: {
+      planId: plan.id,
+      brand: plan.brand,
+      source: "autonomous-content-engine",
+      format: "mp4"
+    }
+  });
+
   const head = await env.ASSETS.head(videoKey);
-  if (!head || head.size < 1000 || head.httpMetadata?.contentType !== "video/mp4") throw new Error("Rendered Reel MP4 failed R2 verification.");
+  if (!head || head.size < 1000 || head.httpMetadata?.contentType !== "video/mp4") {
+    throw new Error("Rendered Reel MP4 failed R2 verification.");
+  }
+
   return `${origin}/api/autoposter/assets/${encodeURIComponent(videoKey)}`;
 }
+
 /**
  * Autonomous execution for REEL format
  */
