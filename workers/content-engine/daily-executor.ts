@@ -105,19 +105,14 @@ export async function executePlanItem(
     };
   }
 
-  const job = getJob(`job-${plan.id}`) || {
-    id: `job-${plan.id}`,
-    planId: plan.id,
-    brand: plan.brand,
-    format: plan.format,
-    state: plan.status,
-    retryCount: 0,
-    maxRetries: 3,
-    currentStep: "EXECUTING",
-    logs: [],
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
+  const job = await createContentJob(plan, env.DB);
+  if (job.state === "FAILED" && job.retryCount >= job.maxRetries && !options.forceRegenerate) {
+    return {
+      ok: false, planId: plan.id, brand: plan.brand, format: plan.format,
+      stage: "RETRY_LIMIT", status: "FAILED",
+      error: "Retry limit reached for job " + job.id + " (" + job.retryCount + "/" + job.maxRetries + ")."
+    };
+  }
 
   try {
     if (plan.format === "POST") {
@@ -196,17 +191,10 @@ async function executePostPlan(
       customPrompt: plan.hook
     };
 
-    if (env.AI) {
-      try {
-        const genRes = await generateCaption(env, brief);
-        caption = genRes.caption;
-      } catch (aiErr) {
-        console.warn("AI caption generation warning:", aiErr);
-        caption = `${plan.hook}\n\n${plan.captionBrief}\n\nKey Takeaway: ${plan.topic} is changing how we approach modern business automation.\n\n${plan.cta}\n\n#${plan.brand} #${plan.pillar.replace(/[^a-zA-Z0-9]/g, "")}`;
-      }
-    } else {
-      caption = `${plan.hook}\n\n${plan.captionBrief}\n\nKey Takeaway: Actionable efficiency through intelligent automation.\n\n${plan.cta}\n\n#${plan.brand} #${plan.pillar.replace(/[^a-zA-Z0-9]/g, "")}`;
-    }
+    if (!env.AI) throw new Error("Workers AI is required for autonomous caption generation.");
+    const genRes = await generateCaption(env, brief);
+    caption = String(genRes.caption || "").trim();
+    if (!caption) throw new Error("AI caption generation returned an empty caption.");
 
     plan.generatedCaption = caption;
     updatePlan(plan.id, { generatedCaption: caption });
@@ -607,6 +595,7 @@ async function publishPostToFacebook(
       const fbRes = await postToFacebook(caption, pageConfig.id, pageToken);
       fbPostId = String(fbRes.id || "");
     }
+    if (!fbPostId) throw new Error("Facebook Post API returned no publication ID.");
   } catch (fbErr: any) {
     const errorMsg = fbErr instanceof Error ? fbErr.message : String(fbErr);
     // If Facebook tokens are missing or mock in local development environment, record graceful simulation
@@ -727,6 +716,7 @@ async function publishReelToFacebook(
   try {
     const result = await publishFacebookReel(env, plan.brand as any, videoUrl, caption, plan.title);
     fbVideoId = String(result.videoId || "");
+    if (!fbVideoId) throw new Error("Facebook Reel API returned no publication ID.");
   } catch (reelErr: any) {
     const errorMsg = reelErr instanceof Error ? reelErr.message : String(reelErr);
     if (
