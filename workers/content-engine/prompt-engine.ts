@@ -49,19 +49,28 @@ export function buildCaptionPrompt(plan: PostPlan): string {
  */
 export function buildImagePrompt(creative: CreativeDirection, brandName: string): string {
   const profile = getBrandProfile(brandName);
+  const noTextTail =
+    "Clean artwork only: NO text, letters, words, typos, logos, watermarks, signatures, fake UI, or numbers.";
 
-  return [
-    creative.promptOutput,
-    `Visual Family: ${creative.visualFamily}.`,
+  const body = [
+    `Create a ${creative.visualFamily} commercial artwork for ${profile.name}.`,
     `Subject: ${creative.subject}.`,
-    `Composition: ${creative.composition}.`,
-    `Camera Perspective: ${creative.cameraPerspective}.`,
+    creative.visualMetaphor ? `Visual Metaphor: ${creative.visualMetaphor}.` : "",
+    `Composition: ${creative.composition} (${creative.aspectRatio}).`,
+    `Camera: ${creative.cameraPerspective}.`,
     `Lighting: ${creative.lighting}.`,
-    `Color Palette & Mood: ${creative.colorPalette}.`,
+    `Color & Mood: ${creative.colorPalette}.`,
     `Environment: ${creative.environment}.`,
-    `Atmosphere: Pristine commercial quality, high dynamic range, sharp focus.`,
-    `STRICT NEGATIVE PROMPT: text, letters, words, typos, watermark, signature, blurry, low resolution, amateur, fake UI, floating numbers, cut off edges.`
-  ].join(" ");
+    `Pristine commercial quality, high dynamic range, sharp focus.`
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const maxBodyLen = 1800 - noTextTail.length - 1;
+  const trimmedBody =
+    body.length > maxBodyLen ? body.slice(0, maxBodyLen).replace(/\s+\S*$/, "") + "." : body;
+
+  return `${trimmedBody} ${noTextTail}`.slice(0, 1850).trim();
 }
 
 /**

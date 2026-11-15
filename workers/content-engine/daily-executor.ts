@@ -241,7 +241,8 @@ async function executePostPlan(
       throw new Error("Workers AI or R2 ASSETS binding is not configured for daily image generation.");
     }
     const basePrompt = buildImagePrompt(plan.creativeDirection, plan.brand);
-    const imgPrompt = extraDirection ? `${basePrompt} ${extraDirection}` : basePrompt;
+    const rawPrompt = extraDirection ? `${extraDirection.slice(0, 180)}. ${basePrompt}` : basePrompt;
+    const imgPrompt = rawPrompt.length > 1950 ? rawPrompt.slice(0, 1950).replace(/\s+\S*$/, "").trim() : rawPrompt;
     const aiResult: any = await env.AI.run("@cf/black-forest-labs/flux-1-schnell" as any, {
       prompt: imgPrompt,
       steps: 8
