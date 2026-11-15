@@ -30,24 +30,52 @@ export function evaluateContentQuality(context: QualityEvaluationContext): Quali
   let contentScore = 8.5;
   const caption = generatedCaption || plan.hook;
 
-  // Check for banned clichés
+  // Check for banned clichés & restricted vocabulary
   const foundBanned = profile.voice.bannedClichés.filter((c) =>
     caption.toLowerCase().includes(c.toLowerCase())
   );
-  if (foundBanned.length > 0) {
-    contentScore -= foundBanned.length * 1.5;
+  const foundDontWords = profile.voice.vocabularyDont.filter((w) =>
+    w.length > 3 && caption.toLowerCase().includes(w.toLowerCase())
+  );
+
+  if (foundBanned.length > 0 || foundDontWords.length > 0) {
+    contentScore -= foundBanned.length * 2.0 + foundDontWords.length * 1.0;
     dimensions.push({
       name: "Banned Cliché Compliance",
-      score: Math.max(3, 10 - foundBanned.length * 3),
+      score: Math.max(3, 10 - foundBanned.length * 3 - foundDontWords.length * 1.5),
       passed: false,
-      notes: `Caption contains banned cliché phrase: '${foundBanned.join(", ")}'`
+      notes: `Caption contains restricted phrase(s): '${[...foundBanned, ...foundDontWords].join(", ")}'`
     });
   } else {
     dimensions.push({
       name: "Banned Cliché Compliance",
       score: 9.8,
       passed: true,
-      notes: "Zero banned clichés detected."
+      notes: "Zero banned clichés or restricted phrases detected."
+    });
+  }
+
+  // Generated caption completeness & prompt-leak check (when actual caption is provided)
+  if (typeof generatedCaption === "string") {
+    const trimmed = generatedCaption.trim();
+    const hasPromptLeak =
+      trimmed.includes("STRICT NEGATIVE CONSTRAINTS") ||
+      trimmed.includes("Do not mention these instructions") ||
+      trimmed.includes("undefined");
+    const goodLength = trimmed.length >= 120 && trimmed.length <= 2600;
+    const captionPassed = goodLength && !hasPromptLeak;
+    if (!captionPassed) {
+      contentScore = Math.min(contentScore, 4.5);
+    }
+    dimensions.push({
+      name: "Generated Caption Substance & Hygiene",
+      score: captionPassed ? 9.4 : 4.0,
+      passed: captionPassed,
+      notes: captionPassed
+        ? `Clean post copy (${trimmed.length} chars) with zero prompt leakage.`
+        : hasPromptLeak
+        ? "Caption contains prompt instructions or invalid template artifacts."
+        : `Caption length (${trimmed.length} chars) outside healthy range (120–2600).`
     });
   }
 
@@ -95,8 +123,24 @@ export function evaluateContentQuality(context: QualityEvaluationContext): Quali
         : "Warning: Missing text-free policy flag."
     });
 
-    if (generatedImageUrl && generatedImageUrl.length < 5) {
-      visualScore = 4.0;
+    if (generatedImageUrl !== undefined) {
+      const validImageUrl =
+        typeof generatedImageUrl === "string" &&
+        /^https?:\/\//i.test(generatedImageUrl) &&
+        !generatedImageUrl.includes("placeholder-") &&
+        !generatedImageUrl.includes("studio.local") &&
+        !generatedImageUrl.startsWith("data:");
+      if (!validImageUrl) {
+        visualScore = 3.0;
+      }
+      dimensions.push({
+        name: "Generated R2 Visual Asset Integrity",
+        score: validImageUrl ? 9.6 : 3.0,
+        passed: validImageUrl,
+        notes: validImageUrl
+          ? "Verified hosted R2 visual URL for Facebook publishing."
+          : "Missing or non-public generated image URL."
+      });
     }
   } else if (plan.format === "REEL") {
     const reelPlan = plan as ReelPlan;

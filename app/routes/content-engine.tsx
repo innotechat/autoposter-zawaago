@@ -26,6 +26,7 @@ import {
   WarningCircle,
   X
 } from "@phosphor-icons/react";
+import { resolveAssetUrl } from "../lib/asset-url";
 import "../app.css";
 
 interface PlanItem {
@@ -52,6 +53,9 @@ interface PlanItem {
   publishedAt?: string;
   dayIndex?: number;
   planBatchId?: string;
+  retryCount?: number;
+  nextRetryAt?: string;
+  errorMessage?: string;
   creativeDirection?: {
     visualFamily: string;
     composition: string;
@@ -128,7 +132,16 @@ interface ContentJobItem {
 
 export default function ContentEngineDashboard() {
   const [activeTab, setActiveTab] = useState<"calendar" | "jobs" | "brands" | "memory" | "simulation">("calendar");
-  const [automationEnabled, setAutomationEnabled] = useState(true);
+  const [automationEnabled, setAutomationEnabled] = useState(false);
+  const [engineSettings, setEngineSettings] = useState<{
+    publicOrigin?: string;
+    preGenerateMinutes?: number;
+    autoPlanRollingDays?: number;
+    lastCronRunAt?: string;
+    lastCronSummary?: string;
+    lastCronError?: string;
+  } | null>(null);
+  const [todayIst, setTodayIst] = useState(() => new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10));
   const [plans, setPlans] = useState<PlanItem[]>([]);
   const [jobs, setJobs] = useState<ContentJobItem[]>([]);
   const [brands, setBrands] = useState<BrandProfile[]>([]);
@@ -157,7 +170,9 @@ export default function ContentEngineDashboard() {
       const res = await fetch("/api/content-engine/status");
       const data: any = await res.json();
       if (data.ok) {
-        setAutomationEnabled(data.automationEnabled);
+        setAutomationEnabled(Boolean(data.automationEnabled));
+        if (data.settings) setEngineSettings(data.settings);
+        if (data.todayIst) setTodayIst(data.todayIst);
       }
     } catch (e) {
       console.error(e);
@@ -227,16 +242,47 @@ export default function ContentEngineDashboard() {
       });
       const data: any = await res.json();
       if (data.ok) {
-        setAutomationEnabled(data.automationEnabled);
+        setAutomationEnabled(Boolean(data.automationEnabled));
+        if (data.settings) setEngineSettings(data.settings);
         setStatusNotice({
           type: "info",
           message: data.automationEnabled
-            ? "Autonomous scheduler resumed (Zawaago & InnoTech daily posting schedule active)."
-            : "Autonomous scheduler paused. Manual human control active."
+            ? "Autonomous scheduler active (persisted). Cron will maintain rolling daily plans and auto-post Zawaago (12:30 IST) & InnoTech (13:00 IST) Posts."
+            : "Autonomous scheduler paused (persisted). Cron auto-posting for Content Engine is stopped."
         });
       }
     } catch (e) {
       console.error(e);
+    }
+  }
+
+  async function runCronCycleNow() {
+    setActionInProgress("cron-cycle");
+    setStatusNotice({
+      type: "info",
+      message: "Running Cron automation cycle (rolling IST planning, T-30m Post pre-generation, and due schedule publishing)…"
+    });
+    try {
+      const res = await fetch("/api/content-engine/cron/run-now", { method: "POST" });
+      const data: any = await res.json();
+      if (data.ok) {
+        if (data.settings) setEngineSettings(data.settings);
+        const eng = data.engine || {};
+        const sch = data.scheduler || {};
+        setStatusNotice({
+          type: eng.skipped ? "info" : eng.failedPosts > 0 || sch.failed > 0 ? "error" : "success",
+          message: eng.skipped
+            ? `${eng.reason} Scheduler due check: processed ${sch.processed || 0}, published ${sch.published || 0}.`
+            : `Cron cycle complete: +${eng.plansCreated || 0} planned, ${eng.processedPosts || 0} posts prepared, ${(eng.publishedPosts || 0) + (sch.published || 0)} published, ${(eng.failedPosts || 0) + (sch.failed || 0)} failed.`
+        });
+        await Promise.all([loadEngineStatus(), loadPlans(), loadJobs(), loadMemory()]);
+      } else {
+        throw new Error(data.error || "Cron cycle failed");
+      }
+    } catch (e: any) {
+      setStatusNotice({ type: "error", message: e.message || "Cron cycle failed." });
+    } finally {
+      setActionInProgress(null);
     }
   }
 
@@ -250,13 +296,13 @@ export default function ContentEngineDashboard() {
       const res = await fetch("/api/content-engine/plan-10-days", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brands: ["Zawaago", "InnoTech"] })
+        body: JSON.stringify({ startDate: todayIst, brands: ["Zawaago", "InnoTech"] })
       });
       const data: any = await res.json();
       if (data.ok) {
         setStatusNotice({
           type: "success",
-          message: `Generated 10-Day Plan (${data.totalPlans} items) with ${(
+          message: `Generated 10-Day Plan (${data.totalPlans} items starting ${data.startDate}) with ${(
             data.overallVisualDiversityIndex * 100
           ).toFixed(0)}% visual diversity. Persisted in D1 database.`
         });
@@ -275,22 +321,22 @@ export default function ContentEngineDashboard() {
 
   async function executeTodayQueue(publishNow = true) {
     setActionInProgress("executing-today");
-    const today = new Date().toISOString().slice(0, 10);
+    const targetIst = new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
     setStatusNotice({
       type: "info",
-      message: `Running autonomous daily pipeline for ${today} (Generate → Quality Gate → Ready → Facebook Publish)…`
+      message: `Running autonomous daily POST pipeline for ${targetIst} IST (Generate → Quality Gate → Ready → Facebook Publish)…`
     });
     try {
       const res = await fetch("/api/content-engine/execute-daily-queue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ date: today, publishNow })
+        body: JSON.stringify({ date: targetIst, publishNow })
       });
       const data: any = await res.json();
       if (data.ok) {
         setStatusNotice({
-          type: "success",
-          message: `Daily queue executed: ${data.successful} processed, ${data.skipped} skipped (already published), ${data.failed} failed.`
+          type: data.failed > 0 ? "error" : "success",
+          message: `Daily POST queue (${data.date}): ${data.successful} processed, ${data.skipped} skipped (already published), ${data.failed} failed.`
         });
         await loadPlans();
         await loadJobs();
@@ -553,8 +599,8 @@ export default function ContentEngineDashboard() {
             </button>
           </div>
 
-          {/* Primary Action Buttons */}
-          <div className="flex items-center gap-2">
+            {/* Primary Action Buttons */}
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={generate10DayCalendar}
               disabled={actionInProgress !== null}
@@ -578,7 +624,21 @@ export default function ContentEngineDashboard() {
               ) : (
                 <Play size={14} weight="fill" />
               )}
-              <span>Execute Today's Queue</span>
+              <span>Execute Today's Posts</span>
+            </button>
+
+            <button
+              onClick={runCronCycleNow}
+              disabled={actionInProgress !== null}
+              className="icon-button !min-h-[38px] px-3 text-[11px] font-semibold"
+              title="Run one Cron automation & scheduler cycle now"
+            >
+              {actionInProgress === "cron-cycle" ? (
+                <SpinnerGap size={14} className="animate-spin" />
+              ) : (
+                <ArrowClockwise size={14} />
+              )}
+              <span>Run Cron Cycle</span>
             </button>
           </div>
         </div>
@@ -587,38 +647,60 @@ export default function ContentEngineDashboard() {
         {activeTab === "calendar" && (
           <div className="space-y-4">
             {/* Autonomous Workflow Pipeline Bar */}
-            <div className="panel p-4 bg-white/80 border border-[#deddd9] rounded-xl">
-              <div className="text-[11px] font-bold text-[#666] mb-2 uppercase tracking-wider">
-                Autonomous Execution Pipeline
+            <div className="panel p-4 bg-white/80 border border-[#deddd9] rounded-xl space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-[11px] font-bold text-[#666] uppercase tracking-wider">
+                  Autonomous Execution Pipeline • IST Today: {todayIst}
+                </div>
+                <div className="text-[11px] text-[#666] flex flex-wrap items-center gap-3">
+                  <span>
+                    Pre-gen: <strong>{engineSettings?.preGenerateMinutes ?? 30}m</strong> before post
+                  </span>
+                  <span>
+                    Origin: <strong>{engineSettings?.publicOrigin || "Auto-captured on HTTPS visit"}</strong>
+                  </span>
+                  {engineSettings?.lastCronRunAt && (
+                    <span>
+                      Last Cron:{" "}
+                      <strong>{new Date(engineSettings.lastCronRunAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</strong>
+                      {engineSettings.lastCronSummary ? ` (${engineSettings.lastCronSummary})` : ""}
+                    </span>
+                  )}
+                </div>
               </div>
+              {engineSettings?.lastCronError && (
+                <div className="p-2 rounded-lg bg-[#fff2f0] border border-[#fecdca] text-[11px] text-[#b42318]">
+                  <strong>Last Cron Error:</strong> {engineSettings.lastCronError}
+                </div>
+              )}
               <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 text-center text-[10px]">
                 <div className="p-2 rounded-lg bg-[#f0efec] border border-[#deddd9] font-medium">
-                  <span className="block font-bold text-[#171717]">1. 10-Day Strategy</span>
-                  <span className="text-[#888]">Brand Brain & Topics</span>
+                  <span className="block font-bold text-[#171717]">1. Rolling Strategy</span>
+                  <span className="text-[#888]">Daily IST Auto-Plan</span>
                 </div>
                 <div className="p-2 rounded-lg bg-[#f0efec] border border-[#deddd9] font-medium">
-                  <span className="block font-bold text-[#171717]">2. Today's Queue</span>
-                  <span className="text-[#888]">Day-by-Day Fetch</span>
+                  <span className="block font-bold text-[#171717]">2. Daily Claim</span>
+                  <span className="text-[#888]">T-{engineSettings?.preGenerateMinutes ?? 30}m Atomic Lock</span>
                 </div>
                 <div className="p-2 rounded-lg bg-[#f0efec] border border-[#deddd9] font-medium">
-                  <span className="block font-bold text-[#171717]">3. AI Generation</span>
-                  <span className="text-[#888]">Caption & Flux Visuals</span>
+                  <span className="block font-bold text-[#171717]">3. Fresh Media</span>
+                  <span className="text-[#888]">Daily Caption & Flux</span>
                 </div>
                 <div className="p-2 rounded-lg bg-[#f0efec] border border-[#deddd9] font-medium">
                   <span className="block font-bold text-[#171717]">4. Quality Gate</span>
-                  <span className="text-[#888]">Hook & Narrative Score</span>
+                  <span className="text-[#888]">Auto-Retry If Low</span>
                 </div>
                 <div className="p-2 rounded-lg bg-[#f0efec] border border-[#deddd9] font-medium">
                   <span className="block font-bold text-[#171717]">5. R2 Storage</span>
-                  <span className="text-[#888]">Immutable Assets</span>
+                  <span className="text-[#888]">Public HTTPS Asset</span>
                 </div>
                 <div className="p-2 rounded-lg bg-[#f0efec] border border-[#deddd9] font-medium">
                   <span className="block font-bold text-[#171717]">6. Scheduled Time</span>
-                  <span className="text-[#888]">12:30 / 1:00 / 6:30 / 7:00</span>
+                  <span className="text-[#888]">12:30 & 13:00 IST</span>
                 </div>
                 <div className="p-2 rounded-lg bg-[#edf8f3] border border-[#bce2d0] text-[#1b7a54] font-medium">
                   <span className="block font-bold">7. Facebook Publish</span>
-                  <span className="text-[#2b8a64]">Feed & Reels API</span>
+                  <span className="text-[#2b8a64]">Synced History & D1</span>
                 </div>
               </div>
             </div>
@@ -710,9 +792,14 @@ export default function ContentEngineDashboard() {
                   const isZawaago = plan.brand.toLowerCase().includes("zawaago");
                   const isPost = plan.format === "POST";
                   const scheduleTimeStr = plan.scheduledFor
-                    ? new Date(plan.scheduledFor).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                    ? new Date(plan.scheduledFor).toLocaleTimeString("en-IN", {
+                        timeZone: "Asia/Kolkata",
+                        hour: "2-digit",
+                        minute: "2-digit"
+                      })
                     : "";
                   const scheduleDateStr = plan.scheduledFor ? plan.scheduledFor.slice(0, 10) : "";
+                  const imgPreviewSrc = resolveAssetUrl(plan.generatedImageUrl);
 
                   return (
                     <div
@@ -761,13 +848,17 @@ export default function ContentEngineDashboard() {
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#faf5ff] text-[#7e22ce] border border-[#e9d5ff]">
                                 Scheduled
                               </span>
+                            ) : plan.status === "RETRYING" ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#fef3c7] text-[#92400e] border border-[#fde68a]">
+                                Retrying ({plan.retryCount || 1}/3)
+                              </span>
                             ) : plan.status === "FAILED" ? (
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#fff2f0] text-[#b42318] border border-[#fecdca]">
                                 Failed
                               </span>
                             ) : (
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#f5f5f4] text-[#78716c] border border-[#e7e5e4]">
-                                Planned
+                                {plan.status === "GENERATING" || plan.status === "PUBLISHING" ? plan.status : "Planned"}
                               </span>
                             )}
                           </div>
@@ -805,10 +896,23 @@ export default function ContentEngineDashboard() {
                             </div>
                           )}
 
-                          {plan.generatedImageUrl && (
-                            <div className="flex items-center gap-2 text-[10px] text-[#1b7a54] font-semibold mb-2">
-                              <CheckCircle size={12} weight="fill" />
-                              <span>Flux Visual Stored in R2</span>
+                          {imgPreviewSrc && !imgPreviewSrc.includes("placeholder-") && (
+                            <div className="flex items-center gap-2.5 mb-2">
+                              <img
+                                src={imgPreviewSrc}
+                                alt={plan.topic}
+                                className="w-12 h-12 rounded-lg object-cover border border-[#deddd9] shrink-0"
+                              />
+                              <div className="flex items-center gap-1.5 text-[10px] text-[#1b7a54] font-semibold">
+                                <CheckCircle size={12} weight="fill" />
+                                <span>Daily Flux Visual Stored in R2</span>
+                              </div>
+                            </div>
+                          )}
+
+                          {plan.errorMessage && (
+                            <div className="p-2 rounded-lg bg-[#fff2f0] border border-[#fecdca] text-[10px] text-[#b42318] mb-2">
+                              <strong>Error:</strong> {plan.errorMessage}
                             </div>
                           )}
 
@@ -836,7 +940,7 @@ export default function ContentEngineDashboard() {
                             <span>Inspect</span>
                           </button>
 
-                          {plan.status === "FAILED" ? (
+                          {plan.status === "FAILED" || plan.status === "RETRYING" ? (
                             <button
                               onClick={() => retryJob(plan.id)}
                               disabled={actionInProgress !== null}
@@ -918,7 +1022,9 @@ export default function ContentEngineDashboard() {
                                 ? "bg-[#edf8f3] text-[#1b7a54]"
                                 : j.state === "FAILED"
                                 ? "bg-[#fff2f0] text-[#b42318]"
-                                : j.state === "READY"
+                                : j.state === "RETRYING"
+                                ? "bg-[#fef3c7] text-[#92400e]"
+                                : j.state === "READY" || j.state === "SCHEDULED"
                                 ? "bg-[#eff6ff] text-[#1d4ed8]"
                                 : "bg-[#f5f5f4] text-[#666]"
                             }`}
@@ -926,7 +1032,14 @@ export default function ContentEngineDashboard() {
                             {j.state}
                           </span>
                         </td>
-                        <td className="py-2 px-3 text-[#777]">{j.currentStep || "-"}</td>
+                        <td className="py-2 px-3 text-[#777]">
+                          <div>{j.currentStep || "-"}</div>
+                          {j.errorMessage && (
+                            <div className="text-[10px] text-[#b42318] line-clamp-1" title={j.errorMessage}>
+                              {j.errorMessage}
+                            </div>
+                          )}
+                        </td>
                         <td className="py-2 px-3 text-[#777]">
                           {j.retryCount} / {j.maxRetries}
                         </td>
@@ -934,7 +1047,7 @@ export default function ContentEngineDashboard() {
                           {j.facebookPostId || "-"}
                         </td>
                         <td className="py-2 px-3 text-right">
-                          {j.state === "FAILED" ? (
+                          {j.state === "FAILED" || j.state === "RETRYING" ? (
                             <button
                               onClick={() => retryJob(j.id)}
                               className="small-action text-[10px] font-bold text-[#b42318] cursor-pointer"

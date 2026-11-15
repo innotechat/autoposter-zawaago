@@ -221,6 +221,10 @@ export interface PostPlan {
   publishedAt?: string;
   dayIndex?: number;
   planBatchId?: string;
+  retryCount?: number;
+  nextRetryAt?: string;
+  errorMessage?: string;
+  processingStartedAt?: string;
   updatedAt?: string;
 }
 
@@ -249,6 +253,10 @@ export interface ReelPlan {
   publishedAt?: string;
   dayIndex?: number;
   planBatchId?: string;
+  retryCount?: number;
+  nextRetryAt?: string;
+  errorMessage?: string;
+  processingStartedAt?: string;
   updatedAt?: string;
 }
 
@@ -272,6 +280,10 @@ export interface StoryPlan {
   publishedAt?: string;
   dayIndex?: number;
   planBatchId?: string;
+  retryCount?: number;
+  nextRetryAt?: string;
+  errorMessage?: string;
+  processingStartedAt?: string;
   updatedAt?: string;
 }
 

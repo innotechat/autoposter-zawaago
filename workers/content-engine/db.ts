@@ -151,6 +151,16 @@ export async function ensureContentEngineTables(db?: D1DatabaseLike): Promise<bo
       )
       .run();
 
+    await db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS content_settings (
+          id TEXT PRIMARY KEY,
+          settings_json TEXT NOT NULL,
+          updated_at TEXT DEFAULT (datetime('now'))
+        )`
+      )
+      .run();
+
     // Create Indexes
     await db.prepare(`CREATE INDEX IF NOT EXISTS idx_plans_brand_date ON content_plans(brand, scheduled_for)`).run();
     await db.prepare(`CREATE INDEX IF NOT EXISTS idx_plans_status ON content_plans(status)`).run();
@@ -177,8 +187,13 @@ export async function ensureContentEngineTables(db?: D1DatabaseLike): Promise<bo
       "ALTER TABLE content_plans ADD COLUMN day_index INTEGER",
       "ALTER TABLE content_plans ADD COLUMN plan_batch_id TEXT",
       "ALTER TABLE content_plans ADD COLUMN published_at TEXT",
+      "ALTER TABLE content_plans ADD COLUMN retry_count INTEGER DEFAULT 0",
+      "ALTER TABLE content_plans ADD COLUMN next_retry_at TEXT",
+      "ALTER TABLE content_plans ADD COLUMN error_message TEXT",
+      "ALTER TABLE content_plans ADD COLUMN processing_started_at TEXT",
       "ALTER TABLE content_jobs ADD COLUMN facebook_post_id TEXT",
       "ALTER TABLE content_jobs ADD COLUMN published_at TEXT",
+      "ALTER TABLE content_jobs ADD COLUMN next_retry_at TEXT",
     ];
     for (const ddl of optionalColumns) {
       try {
@@ -212,8 +227,10 @@ export async function savePlanToD1(plan: any, db?: D1DatabaseLike): Promise<void
           id, brand, format, pillar, sub_pillar, objective, topic, angle, hook,
           caption_brief, cta, target_audience, language, scheduled_for, status,
           quality_score, plan_json, generated_caption, generated_media_url,
-          facebook_post_id, day_index, plan_batch_id, published_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+          facebook_post_id, day_index, plan_batch_id, published_at,
+          retry_count, next_retry_at, error_message, processing_started_at,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
         ON CONFLICT(id) DO UPDATE SET
           status = excluded.status,
           quality_score = excluded.quality_score,
@@ -222,6 +239,10 @@ export async function savePlanToD1(plan: any, db?: D1DatabaseLike): Promise<void
           generated_media_url = excluded.generated_media_url,
           facebook_post_id = excluded.facebook_post_id,
           published_at = excluded.published_at,
+          retry_count = excluded.retry_count,
+          next_retry_at = excluded.next_retry_at,
+          error_message = excluded.error_message,
+          processing_started_at = excluded.processing_started_at,
           updated_at = datetime('now')`
       )
       .bind(
@@ -247,7 +268,11 @@ export async function savePlanToD1(plan: any, db?: D1DatabaseLike): Promise<void
         fbPostId || null,
         plan.dayIndex || null,
         plan.planBatchId || null,
-        publishedAt
+        publishedAt,
+        Number(plan.retryCount || 0),
+        plan.nextRetryAt || null,
+        plan.errorMessage || null,
+        plan.processingStartedAt || null
       )
       .run();
 
@@ -291,7 +316,8 @@ export async function savePlanToD1(plan: any, db?: D1DatabaseLike): Promise<void
 export async function loadPlansFromD1(db?: D1DatabaseLike, brand?: string, status?: string): Promise<any[]> {
   if (!db) return [];
   try {
-    let query = "SELECT plan_json, status, quality_score, generated_caption, generated_media_url, facebook_post_id, published_at FROM content_plans WHERE 1=1";
+    let query =
+      "SELECT plan_json, status, quality_score, generated_caption, generated_media_url, facebook_post_id, published_at, retry_count, next_retry_at, error_message, processing_started_at FROM content_plans WHERE 1=1";
     const binds: any[] = [];
     if (brand && brand !== "All") {
       query += " AND LOWER(brand) = LOWER(?)";
@@ -321,6 +347,10 @@ export async function loadPlansFromD1(db?: D1DatabaseLike, brand?: string, statu
             if (parsed.format === "REEL") parsed.facebookVideoId = row.facebook_post_id;
           }
           if (row.published_at) parsed.publishedAt = row.published_at;
+          if (row.retry_count !== undefined && row.retry_count !== null) parsed.retryCount = Number(row.retry_count);
+          if (row.next_retry_at) parsed.nextRetryAt = row.next_retry_at;
+          if (row.error_message) parsed.errorMessage = row.error_message;
+          if (row.processing_started_at) parsed.processingStartedAt = row.processing_started_at;
           plans.push(parsed);
         } catch (_) {}
       }
@@ -335,10 +365,16 @@ export async function loadPlansFromD1(db?: D1DatabaseLike, brand?: string, statu
 export async function getPlanFromD1(id: string, db?: D1DatabaseLike): Promise<any | null> {
   if (!db) return null;
   try {
-    const row = await db.prepare("SELECT plan_json, status, generated_caption, generated_media_url, facebook_post_id, published_at FROM content_plans WHERE id = ?").bind(id).first<any>();
+    const row = await db
+      .prepare(
+        "SELECT plan_json, status, quality_score, generated_caption, generated_media_url, facebook_post_id, published_at, retry_count, next_retry_at, error_message, processing_started_at FROM content_plans WHERE id = ?"
+      )
+      .bind(id)
+      .first<any>();
     if (!row || !row.plan_json) return null;
     const parsed = JSON.parse(row.plan_json as string);
     if (row.status) parsed.status = row.status;
+    if (row.quality_score) parsed.qualityScore = row.quality_score;
     if (row.generated_caption) parsed.generatedCaption = row.generated_caption;
     if (row.generated_media_url) {
       if (parsed.format === "POST") parsed.generatedImageUrl = row.generated_media_url;
@@ -349,6 +385,10 @@ export async function getPlanFromD1(id: string, db?: D1DatabaseLike): Promise<an
       if (parsed.format === "REEL") parsed.facebookVideoId = row.facebook_post_id;
     }
     if (row.published_at) parsed.publishedAt = row.published_at;
+    if (row.retry_count !== undefined && row.retry_count !== null) parsed.retryCount = Number(row.retry_count);
+    if (row.next_retry_at) parsed.nextRetryAt = row.next_retry_at;
+    if (row.error_message) parsed.errorMessage = row.error_message;
+    if (row.processing_started_at) parsed.processingStartedAt = row.processing_started_at;
     return parsed;
   } catch (err) {
     console.warn("getPlanFromD1 warning:", err);
@@ -364,6 +404,113 @@ export async function updatePlanInD1(id: string, updates: Record<string, any>, d
     await savePlanToD1(merged, db);
   } catch (err) {
     console.warn("updatePlanInD1 warning:", err);
+  }
+}
+
+export async function hasPlanForBrandFormatDateD1(
+  brand: string,
+  format: string,
+  dateStr: string,
+  db?: D1DatabaseLike
+): Promise<boolean> {
+  if (!db) return false;
+  try {
+    const row = await db
+      .prepare(
+        `SELECT id FROM content_plans
+         WHERE LOWER(brand) = LOWER(?)
+           AND format = ?
+           AND scheduled_for LIKE ?
+           AND status NOT IN ('CANCELLED', 'FAILED')
+         LIMIT 1`
+      )
+      .bind(brand, format, `${dateStr}%`)
+      .first<{ id: string }>();
+    return Boolean(row?.id);
+  } catch (err) {
+    console.warn("hasPlanForBrandFormatDateD1 warning:", err);
+    return false;
+  }
+}
+
+export async function claimPlanForStageD1(
+  planId: string,
+  expectedStatuses: string[],
+  targetStatus: string,
+  db?: D1DatabaseLike
+): Promise<boolean> {
+  if (!db) return true;
+  if (expectedStatuses.length === 0) return false;
+  const placeholders = expectedStatuses.map(() => "?").join(", ");
+  const nowIso = new Date().toISOString();
+  try {
+    const res = await db
+      .prepare(
+        `UPDATE content_plans
+         SET status = ?, processing_started_at = ?, updated_at = datetime('now')
+         WHERE id = ?
+           AND status IN (${placeholders})
+           AND (facebook_post_id IS NULL OR facebook_post_id = '')`
+      )
+      .bind(targetStatus, nowIso, planId, ...expectedStatuses)
+      .run();
+    const changes = Number(res?.meta?.changes ?? 0);
+    return changes > 0;
+  } catch (err) {
+    console.warn("claimPlanForStageD1 warning:", err);
+    return false;
+  }
+}
+
+export async function recoverStaleGeneratingPlansD1(db?: D1DatabaseLike, staleMinutes = 10): Promise<number> {
+  if (!db) return 0;
+  const cutoffIso = new Date(Date.now() - staleMinutes * 60 * 1000).toISOString();
+  try {
+    const res = await db
+      .prepare(
+        `UPDATE content_plans
+         SET status = 'RETRYING',
+             processing_started_at = NULL,
+             error_message = 'Recovered stale lock after timeout.',
+             updated_at = datetime('now')
+         WHERE status IN ('GENERATING', 'PUBLISHING')
+           AND (facebook_post_id IS NULL OR facebook_post_id = '')
+           AND (processing_started_at IS NULL OR processing_started_at < ?)`
+      )
+      .bind(cutoffIso)
+      .run();
+    return Number(res?.meta?.changes ?? 0);
+  } catch (err) {
+    console.warn("recoverStaleGeneratingPlansD1 warning:", err);
+    return 0;
+  }
+}
+
+export async function saveQualityCheckToD1(check: any, db?: D1DatabaseLike): Promise<void> {
+  if (!db) return;
+  try {
+    await db
+      .prepare(
+        `INSERT INTO content_quality_checks (
+          id, plan_id, overall_score, passed, content_score, visual_score,
+          repetition_score, details_json, retry_directive, evaluated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        `qc-${crypto.randomUUID()}`,
+        check.planId,
+        check.overallScore,
+        check.passed ? 1 : 0,
+        check.contentScore,
+        check.visualScore,
+        check.repetitionScore,
+        JSON.stringify(check.dimensions || []),
+        check.retryDirective ? JSON.stringify(check.retryDirective) : null,
+        check.evaluatedAt || new Date().toISOString()
+      )
+      .run();
+  } catch (err) {
+    console.warn("saveQualityCheckToD1 warning:", err);
   }
 }
 

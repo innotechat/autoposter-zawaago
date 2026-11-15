@@ -3,27 +3,34 @@ import {
   generateDailyPlan,
   generateTenDayPlan,
   getPlanById,
-  isAutomationEnabled,
+  isAutomationEnabledPersisted,
   listPlans,
-  setAutomationEnabled,
+  setAutomationEnabledPersisted,
   simulateSchedule,
   syncPlansWithD1,
   updatePlan
 } from "./autonomous-planner";
-import { getBrandProfile, listRegisteredBrands, registerBrand, updateBrandProfile } from "./brand-brain";
+import { getBrandProfile, listRegisteredBrands, registerBrand } from "./brand-brain";
 import { getMemoryStats, searchMemory } from "./content-memory";
 import { deriveStrategyRecommendations } from "./performance-intelligence";
-import { getJob, listJobs, transitionJobState } from "./job-orchestrator";
+import { listJobs } from "./job-orchestrator";
 import { buildCaptionPrompt, buildImagePrompt } from "./prompt-engine";
-import { evaluateContentQuality } from "./quality-gate";
-import { ensureContentEngineTables, loadJobsFromD1 } from "./db";
-import { executeDailyQueue, executePlanItem } from "./daily-executor";
-import type { BrandProfile, PostPlan, ReelPlan } from "./types";
+import { ensureContentEngineTables, getPlanFromD1, loadJobsFromD1, updatePlanInD1 } from "./db";
+import { executeDailyQueue, executePlanItem, processContentEngineCron } from "./daily-executor";
+import {
+  capturePublicOrigin,
+  getIstDateString,
+  loadEngineSettings,
+  saveEngineSettings
+} from "./settings";
+import { processDueSchedules } from "../scheduler";
+import type { BrandProfile, PostPlan } from "./types";
 
 type Env = {
   DB?: any;
   ASSETS?: any;
   AI?: any;
+  PUBLIC_ORIGIN?: string;
   FB_TOKEN_ZAWAAGO?: string;
   FB_TOKEN_INNOTECH?: string;
   PAGE_ID_ZAWAAGO?: string;
@@ -32,29 +39,33 @@ type Env = {
 
 export const contentEngineRoutes = new Hono<{ Bindings: Env }>();
 
-// Middleware to ensure D1 tables exist
+// Middleware to ensure D1 tables exist and learn active public origin
 contentEngineRoutes.use("*", async (c, next) => {
   if (c.env.DB) {
     await ensureContentEngineTables(c.env.DB);
   }
+  await capturePublicOrigin(c.env, c.req.url);
   await next();
 });
 
 /**
- * System status, automation toggle, and memory overview
+ * System status, persisted automation settings, Cron telemetry, and memory overview
  */
 contentEngineRoutes.get("/content-engine/status", async (c) => {
   if (c.env.DB) {
     await syncPlansWithD1(c.env.DB);
   }
+  const settings = await loadEngineSettings(c.env);
   const brands = listRegisteredBrands();
   const memoryStats = await getMemoryStats(undefined, c.env.DB);
-  const jobs = listJobs();
+  const jobs = c.env.DB ? await loadJobsFromD1(c.env.DB) : listJobs();
   const plans = listPlans();
 
   return c.json({
     ok: true,
-    automationEnabled: isAutomationEnabled(),
+    automationEnabled: settings.automationEnabled,
+    settings,
+    todayIst: getIstDateString(),
     brandsCount: brands.length,
     activeBrands: brands.map((b) => ({ name: b.name, handle: b.handle, mission: b.mission })),
     plansCount: plans.length,
@@ -68,13 +79,43 @@ contentEngineRoutes.get("/content-engine/status", async (c) => {
 });
 
 /**
- * Toggle autonomous scheduling engine
+ * Toggle autonomous scheduling engine (persisted in D1 & R2)
  */
 contentEngineRoutes.post("/content-engine/automation/toggle", async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as { enabled?: boolean };
-  const target = typeof body.enabled === "boolean" ? body.enabled : !isAutomationEnabled();
-  setAutomationEnabled(target);
-  return c.json({ ok: true, automationEnabled: target });
+  const body = (await c.req.json().catch(() => ({}))) as {
+    enabled?: boolean;
+    preGenerateMinutes?: number;
+    autoPlanRollingDays?: number;
+  };
+  const current = await isAutomationEnabledPersisted(c.env);
+  const target = typeof body.enabled === "boolean" ? body.enabled : !current;
+  await setAutomationEnabledPersisted(c.env, target);
+
+  if (body.preGenerateMinutes !== undefined || body.autoPlanRollingDays !== undefined) {
+    await saveEngineSettings(c.env, {
+      ...(body.preGenerateMinutes !== undefined ? { preGenerateMinutes: Number(body.preGenerateMinutes) } : {}),
+      ...(body.autoPlanRollingDays !== undefined ? { autoPlanRollingDays: Number(body.autoPlanRollingDays) } : {})
+    });
+  }
+
+  const settings = await loadEngineSettings(c.env);
+  return c.json({ ok: true, automationEnabled: settings.automationEnabled, settings });
+});
+
+/**
+ * Manually trigger one Cron automation cycle (rolling IST plan + pre-gen due POSTs + process due R2 schedules)
+ */
+contentEngineRoutes.post("/content-engine/cron/run-now", async (c) => {
+  const origin = new URL(c.req.url).origin;
+  const engineRes = await processContentEngineCron(c.env);
+  const schedulerRes = await processDueSchedules(c.env, new Date(), origin);
+  const settings = await loadEngineSettings(c.env);
+  return c.json({
+    ok: true,
+    engine: engineRes,
+    scheduler: schedulerRes,
+    settings
+  });
 });
 
 /**
@@ -83,7 +124,7 @@ contentEngineRoutes.post("/content-engine/automation/toggle", async (c) => {
 contentEngineRoutes.post("/content-engine/simulate", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { daysCount?: number; startDate?: string; brands?: string[] };
   const days = Math.min(30, Math.max(1, Number(body.daysCount || 7)));
-  const result = await simulateSchedule(days, body.startDate, body.brands, c.env.DB);
+  const result = await simulateSchedule(days, body.startDate || getIstDateString(), body.brands, c.env.DB);
   return c.json({ ok: true, ...result });
 });
 
@@ -94,10 +135,11 @@ contentEngineRoutes.post("/content-engine/simulate", async (c) => {
 contentEngineRoutes.post("/content-engine/plan-10-days", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { startDate?: string; brands?: string[] };
   const result = await generateTenDayPlan({
-    startDate: body.startDate,
+    startDate: body.startDate || getIstDateString(),
     brands: body.brands || ["Zawaago", "InnoTech"],
     db: c.env.DB,
-    assets: c.env.ASSETS
+    assets: c.env.ASSETS,
+    ai: c.env.AI
   });
 
   return c.json({ ok: true, ...result });
@@ -108,13 +150,14 @@ contentEngineRoutes.post("/content-engine/plan-10-days", async (c) => {
  */
 contentEngineRoutes.post("/content-engine/plan/generate", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { date?: string; brands?: string[]; includeStories?: boolean };
-  const targetDate = body.date || new Date().toISOString().slice(0, 10);
+  const targetDate = body.date || getIstDateString();
   const plan = await generateDailyPlan(
     {
       date: targetDate,
       brands: body.brands || ["Zawaago", "InnoTech"],
       includeStories: body.includeStories || false,
-      dryRun: false
+      dryRun: false,
+      ai: c.env.AI
     },
     c.env.DB,
     c.env.ASSETS
@@ -125,15 +168,16 @@ contentEngineRoutes.post("/content-engine/plan/generate", async (c) => {
 
 /**
  * Autonomous Daily Execution Queue:
- * Executes today's (or given date's) queue: Generate Media → Quality Gate → Ready → Schedule / Publish → History
+ * Executes today's (IST) or given date's POST queue: Generate Media → Quality Gate → Ready → Schedule / Publish → History
  */
 contentEngineRoutes.post("/content-engine/execute-daily-queue", async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as { date?: string; publishNow?: boolean };
-  const targetDate = body.date || new Date().toISOString().slice(0, 10);
+  const body = (await c.req.json().catch(() => ({}))) as { date?: string; publishNow?: boolean; includeReels?: boolean };
+  const targetDate = body.date || getIstDateString();
   const origin = new URL(c.req.url).origin;
 
   const summary = await executeDailyQueue(targetDate, c.env, {
-    publishNow: Boolean(body.publishNow),
+    publishNow: body.publishNow !== false,
+    includeReels: Boolean(body.includeReels),
     requestOrigin: origin
   });
 
@@ -141,9 +185,7 @@ contentEngineRoutes.post("/content-engine/execute-daily-queue", async (c) => {
 });
 
 /**
- * Execute a single planned item through the pipeline:
- * Post: Caption + Image → Quality Gate → Ready → Schedule / Publish → History
- * Reel: Storyboard + Scenes + Render → Quality Gate → Ready → Schedule / Publish → History
+ * Execute a single planned item through the pipeline
  */
 contentEngineRoutes.post("/content-engine/execute-item/:id", async (c) => {
   const id = c.req.param("id");
@@ -167,10 +209,17 @@ contentEngineRoutes.post("/content-engine/retry-job/:id", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { publishNow?: boolean };
   const origin = new URL(c.req.url).origin;
 
-  // Resolve planId from jobId if prefixed
   let planId = id;
   if (id.startsWith("job-")) {
-    planId = id.slice(4);
+    // Look up actual planId from D1 content_jobs first
+    if (c.env.DB) {
+      const row = (await c.env.DB.prepare("SELECT plan_id FROM content_jobs WHERE id = ? LIMIT 1")
+        .bind(id)
+        .first()
+        .catch(() => null)) as { plan_id?: string } | null;
+      if (row?.plan_id) planId = row.plan_id;
+    }
+    if (planId === id) planId = id.slice(4);
   }
 
   const result = await executePlanItem(planId, c.env, {
@@ -198,8 +247,12 @@ contentEngineRoutes.get("/content-engine/plans", async (c) => {
 /**
  * Get single plan with detailed prompts and creative direction
  */
-contentEngineRoutes.get("/content-engine/plans/:id", (c) => {
-  const plan = getPlanById(c.req.param("id"));
+contentEngineRoutes.get("/content-engine/plans/:id", async (c) => {
+  const id = c.req.param("id");
+  let plan = getPlanById(id);
+  if (!plan && c.env.DB) {
+    plan = await getPlanFromD1(id, c.env.DB);
+  }
   if (!plan) return c.json({ ok: false, error: "Plan not found" }, 404);
 
   let captionPrompt = "";
@@ -221,23 +274,26 @@ contentEngineRoutes.get("/content-engine/plans/:id", (c) => {
 });
 
 /**
- * Human Override: Approve plan
+ * Human Override: Approve plan (persists to D1)
  */
 contentEngineRoutes.post("/content-engine/plans/:id/approve", async (c) => {
   const id = c.req.param("id");
-  const plan = getPlanById(id);
+  let plan = getPlanById(id);
+  if (!plan && c.env.DB) plan = await getPlanFromD1(id, c.env.DB);
   if (!plan) return c.json({ ok: false, error: "Plan not found" }, 404);
 
-  updatePlan(id, { status: "APPROVED" });
-  return c.json({ ok: true, plan: getPlanById(id), message: "Plan manually approved." });
+  const updated = updatePlan(id, { status: "APPROVED", errorMessage: undefined });
+  if (c.env.DB) await updatePlanInD1(id, { status: "APPROVED", errorMessage: undefined }, c.env.DB);
+  return c.json({ ok: true, plan: updated, message: "Plan manually approved." });
 });
 
 /**
- * Human Override: Regenerate targeted component
+ * Human Override: Regenerate targeted component (persists to D1)
  */
 contentEngineRoutes.post("/content-engine/plans/:id/regenerate", async (c) => {
   const id = c.req.param("id");
-  const plan = getPlanById(id);
+  let plan = getPlanById(id);
+  if (!plan && c.env.DB) plan = await getPlanFromD1(id, c.env.DB);
   if (!plan) return c.json({ ok: false, error: "Plan not found" }, 404);
 
   const body = (await c.req.json().catch(() => ({}))) as {
@@ -246,43 +302,48 @@ contentEngineRoutes.post("/content-engine/plans/:id/regenerate", async (c) => {
   };
   const target = body.target || "ALL";
 
-  // Trigger regeneration updates
-  if (target === "ALL") {
-    updatePlan(id, { status: "PLANNED" });
-  } else if (target === "CAPTION_ONLY") {
-    updatePlan(id, { generatedCaption: undefined, status: "GENERATING" });
-  } else if (target === "IMAGE_ONLY") {
-    updatePlan(id, { generatedImageUrl: undefined, status: "GENERATING" });
-  }
+  const patch =
+    target === "ALL"
+      ? { status: "PLANNED" as const, generatedCaption: undefined, generatedImageUrl: undefined, errorMessage: undefined }
+      : target === "CAPTION_ONLY"
+      ? { generatedCaption: undefined, status: "PLANNED" as const, errorMessage: undefined }
+      : { generatedImageUrl: undefined, status: "PLANNED" as const, errorMessage: undefined };
 
-  return c.json({ ok: true, plan: getPlanById(id), message: `Regeneration initiated for target: ${target}` });
+  const updated = updatePlan(id, patch);
+  if (c.env.DB) await updatePlanInD1(id, patch, c.env.DB);
+
+  return c.json({ ok: true, plan: updated, message: `Regeneration queued for target: ${target}` });
 });
 
 /**
- * Human Override: Reschedule
+ * Human Override: Reschedule (persists to D1)
  */
 contentEngineRoutes.post("/content-engine/plans/:id/reschedule", async (c) => {
   const id = c.req.param("id");
-  const plan = getPlanById(id);
+  let plan = getPlanById(id);
+  if (!plan && c.env.DB) plan = await getPlanFromD1(id, c.env.DB);
   if (!plan) return c.json({ ok: false, error: "Plan not found" }, 404);
 
   const body = (await c.req.json().catch(() => ({}))) as { scheduledFor?: string };
   if (!body.scheduledFor) return c.json({ ok: false, error: "Missing scheduledFor timestamp" }, 400);
 
-  updatePlan(id, { scheduledFor: body.scheduledFor });
-  return c.json({ ok: true, plan: getPlanById(id), message: "Plan rescheduled." });
+  const updated = updatePlan(id, { scheduledFor: body.scheduledFor });
+  if (c.env.DB) await updatePlanInD1(id, { scheduledFor: body.scheduledFor }, c.env.DB);
+  return c.json({ ok: true, plan: updated, message: "Plan rescheduled." });
 });
 
 /**
- * Human Override: Cancel plan
+ * Human Override: Cancel plan (persists to D1)
  */
 contentEngineRoutes.post("/content-engine/plans/:id/cancel", async (c) => {
   const id = c.req.param("id");
-  const plan = getPlanById(id);
+  let plan = getPlanById(id);
+  if (!plan && c.env.DB) plan = await getPlanFromD1(id, c.env.DB);
   if (!plan) return c.json({ ok: false, error: "Plan not found" }, 404);
 
-  updatePlan(id, { status: "CANCELLED" });
-  return c.json({ ok: true, plan: getPlanById(id), message: "Plan cancelled." });
+  const updated = updatePlan(id, { status: "CANCELLED" });
+  if (c.env.DB) await updatePlanInD1(id, { status: "CANCELLED" }, c.env.DB);
+  return c.json({ ok: true, plan: updated, message: "Plan cancelled." });
 });
 
 /**

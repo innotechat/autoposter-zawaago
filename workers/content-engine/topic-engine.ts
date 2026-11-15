@@ -262,3 +262,82 @@ export function selectOptimalTopicAngle(
     repetitionCheckRationale: bestCandidate.rationale
   };
 }
+
+/**
+ * Enhances topic selection with Workers AI ideation when static catalog topics
+ * have already been covered within the 21-day window, preventing infinite-horizon repetition.
+ */
+export async function selectOptimalTopicAngleWithAI(
+  brandName: string,
+  preferredPillarId: string | undefined,
+  history: PastMemoryQueryItem[],
+  format: "POST" | "REEL" | "STORY",
+  ai?: any
+): Promise<TopicAngle> {
+  const staticChoice = selectOptimalTopicAngle(brandName, preferredPillarId, history, format);
+  if (staticChoice.freshnessScore >= 0.85 || !ai) {
+    return staticChoice;
+  }
+
+  try {
+    const profile = getBrandProfile(brandName);
+    const pillar =
+      profile.pillars.find((p) => p.id === preferredPillarId) ||
+      profile.pillars[Math.floor(Math.random() * profile.pillars.length)] ||
+      profile.pillars[0];
+    const subPillar = pillar?.subPillars[0];
+    const recentTitles = history.slice(0, 15).map((h) => `- ${h.topic}`).join("\n");
+
+    const prompt = [
+      `Generate ONE fresh, specific social content topic title (8 to 16 words) for ${profile.name}.`,
+      `Brand Mission: ${profile.mission}`,
+      `Pillar: ${pillar?.name || "AI & Innovation"} (${pillar?.description || ""})`,
+      `Format: ${format}`,
+      recentTitles ? `DO NOT repeat or closely paraphrase any of these recent topics:\n${recentTitles}` : "",
+      `Return ONLY the single topic title on one line with no quotes, numbering, or explanation.`
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const aiRes: any = await ai.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 80
+    });
+
+    const rawTitle = String(
+      aiRes?.response || aiRes?.result || aiRes?.choices?.[0]?.message?.content || ""
+    )
+      .split("\n")[0]
+      .replace(/^["'\-\d.\s]+|["'\s]+$/g, "")
+      .trim();
+
+    if (rawTitle.length >= 16 && rawTitle.length <= 140) {
+      const evalRes = evaluateTopicAngleRepetition(brandName, rawTitle, staticChoice.angle, history);
+      if (evalRes.allowed && evalRes.freshnessScore >= 0.85) {
+        const angleConfig = ANGLE_CONFIGS[staticChoice.angle];
+        return {
+          topic: {
+            id: `topic-ai-${extractTopicStem(rawTitle)}`,
+            pillarId: pillar?.id || staticChoice.topic.pillarId,
+            subPillarId: subPillar?.id || staticChoice.topic.subPillarId,
+            title: rawTitle,
+            coreConcept: `${pillar?.name || profile.name}: ${rawTitle}`,
+            keywords: rawTitle.toLowerCase().split(/\s+/).filter((w) => w.length > 4),
+            targetAudienceId: profile.targetAudiences[0]?.id || "general",
+            suggestedAngles: staticChoice.topic.suggestedAngles
+          },
+          angle: staticChoice.angle,
+          narrativeHook: angleConfig.hookTemplate(rawTitle),
+          objective: angleConfig.defaultObjective,
+          freshnessScore: evalRes.freshnessScore,
+          repetitionCheckRationale: `AI-ideated fresh topic (${evalRes.rationale})`
+        };
+      }
+    }
+  } catch (err) {
+    console.warn("AI topic ideation fallback warning:", err);
+  }
+
+  return staticChoice;
+}
+

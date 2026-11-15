@@ -7,7 +7,7 @@ import type {
   VisualFamily
 } from "./types";
 import { getBrandProfile, listRegisteredBrands } from "./brand-brain";
-import { selectOptimalTopicAngle } from "./topic-engine";
+import { selectOptimalTopicAngle, selectOptimalTopicAngleWithAI } from "./topic-engine";
 import { formulatePostCreativeDirection, formulateReelCreativeDirection } from "./creative-director";
 import { calculateDiversityIndex } from "./visual-diversity";
 import { coordinateSameDayFormats, selectComplementaryReelAngle } from "./content-relationship";
@@ -20,10 +20,22 @@ import {
   type R2BucketLike
 } from "./content-memory";
 import { createContentJob } from "./job-orchestrator";
-import { getPlanFromD1, loadPlansFromD1, savePlanToD1, updatePlanInD1 } from "./db";
+import {
+  getPlanFromD1,
+  hasPlanForBrandFormatDateD1,
+  loadPlansFromD1,
+  savePlanToD1,
+  updatePlanInD1
+} from "./db";
+import {
+  addDaysToDateString,
+  getIstDateString,
+  loadEngineSettings,
+  saveEngineSettings
+} from "./settings";
 
-// System automation toggle
-let AUTOMATION_ENABLED = true;
+// System automation toggle (fallback cache; authoritative state lives in D1/R2 settings)
+let AUTOMATION_ENABLED = false;
 
 export function isAutomationEnabled(): boolean {
   return AUTOMATION_ENABLED;
@@ -33,11 +45,31 @@ export function setAutomationEnabled(enabled: boolean): void {
   AUTOMATION_ENABLED = enabled;
 }
 
+export async function isAutomationEnabledPersisted(env: {
+  DB?: D1DatabaseLike;
+  ASSETS?: R2BucketLike;
+  PUBLIC_ORIGIN?: string;
+}): Promise<boolean> {
+  const settings = await loadEngineSettings(env);
+  AUTOMATION_ENABLED = settings.automationEnabled;
+  return settings.automationEnabled;
+}
+
+export async function setAutomationEnabledPersisted(
+  env: { DB?: D1DatabaseLike; ASSETS?: R2BucketLike; PUBLIC_ORIGIN?: string },
+  enabled: boolean
+): Promise<boolean> {
+  const updated = await saveEngineSettings(env, { automationEnabled: enabled });
+  AUTOMATION_ENABLED = updated.automationEnabled;
+  return updated.automationEnabled;
+}
+
 export interface PlanGenerationOptions {
-  date: string; // YYYY-MM-DD
+  date?: string; // YYYY-MM-DD (IST)
   brands?: string[]; // Defaults to ["Zawaago", "InnoTech"]
   includeStories?: boolean; // Defaults to false
   dryRun?: boolean; // Defaults to false
+  ai?: any;
 }
 
 // In-memory plan cache
@@ -93,7 +125,13 @@ export async function generateDailyPlan(
   db?: D1DatabaseLike,
   assets?: R2BucketLike
 ): Promise<DailyStrategyPlan> {
-  const { date, brands = ["Zawaago", "InnoTech"], includeStories = false, dryRun = false } = options;
+  const {
+    date = getIstDateString(),
+    brands = ["Zawaago", "InnoTech"],
+    includeStories = false,
+    dryRun = false,
+    ai
+  } = options;
   const plans: UnifiedContentPlan[] = [];
   const visualFamilies: VisualFamily[] = [];
   const pillarCounts: Record<string, number> = {};
@@ -111,93 +149,123 @@ export async function generateDailyPlan(
     const postScheduledFor = `${date}T${postTime}:00+05:30`;
     const reelScheduledFor = `${date}T${reelTime}:00+05:30`;
 
-    // 1. Post Generation: Select optimal topic & angle
-    const postTopicAngle = selectOptimalTopicAngle(brandName, undefined, history, "POST");
-    const postCreative = formulatePostCreativeDirection(
-      brandName,
-      postTopicAngle.topic.title,
-      postTopicAngle.angle,
-      history.map((h) => ({ visualFamily: h.visualFamily, createdAt: h.createdAt })),
-      profile.formatPreferences.postAspectRatio
-    );
+    const postAlreadyExists = !dryRun && (await hasPlanForBrandFormatDateD1(profile.name, "POST", date, db));
+    const reelAlreadyExists = !dryRun && (await hasPlanForBrandFormatDateD1(profile.name, "REEL", date, db));
 
-    const postPlan: PostPlan = {
-      id: `plan-post-${brandName.toLowerCase()}-${date}-${crypto.randomUUID().slice(0, 8)}`,
-      brand: profile.name,
-      format: "POST",
-      pillar: postTopicAngle.topic.pillarId,
-      subPillar: postTopicAngle.topic.subPillarId,
-      objective: postTopicAngle.objective,
-      topic: postTopicAngle.topic.title,
-      angle: postTopicAngle.angle,
-      hook: postTopicAngle.narrativeHook,
-      captionBrief: `Actionable, high-signal breakdown of ${postTopicAngle.topic.title} through the lens of ${postTopicAngle.angle}.`,
-      cta: profile.ctaStrategies[0]?.primaryCta || "Follow for more insights.",
-      targetAudience: profile.targetAudiences[0]?.label || "Business Owners and Leaders",
-      language: profile.voice.primaryLanguage,
-      scheduledFor: postScheduledFor,
-      creativeDirection: postCreative,
-      status: "PLANNED"
-    };
+    let postPlan: PostPlan | null = null;
+    if (!postAlreadyExists) {
+      // 1. Post Generation: Select optimal topic & angle
+      const postTopicAngle = await selectOptimalTopicAngleWithAI(brandName, undefined, history, "POST", ai);
+      const postCreative = formulatePostCreativeDirection(
+        brandName,
+        postTopicAngle.topic.title,
+        postTopicAngle.angle,
+        history.map((h) => ({ visualFamily: h.visualFamily, createdAt: h.createdAt })),
+        profile.formatPreferences.postAspectRatio
+      );
 
-    // Quality Gate Check on Post Plan
-    const postQuality = evaluateContentQuality({
-      plan: postPlan,
-      freshnessScore: postTopicAngle.freshnessScore
-    });
-    postPlan.qualityScore = postQuality.overallScore;
+      postPlan = {
+        id: `plan-post-${brandName.toLowerCase()}-${date}-${crypto.randomUUID().slice(0, 8)}`,
+        brand: profile.name,
+        format: "POST",
+        pillar: postTopicAngle.topic.pillarId,
+        subPillar: postTopicAngle.topic.subPillarId,
+        objective: postTopicAngle.objective,
+        topic: postTopicAngle.topic.title,
+        angle: postTopicAngle.angle,
+        hook: postTopicAngle.narrativeHook,
+        captionBrief: `Actionable, high-signal breakdown of ${postTopicAngle.topic.title} through the lens of ${postTopicAngle.angle}.`,
+        cta: profile.ctaStrategies[0]?.primaryCta || "Follow for more insights.",
+        targetAudience: profile.targetAudiences[0]?.label || "Business Owners and Leaders",
+        language: profile.voice.primaryLanguage,
+        scheduledFor: postScheduledFor,
+        creativeDirection: postCreative,
+        status: "PLANNED"
+      };
 
-    plans.push(postPlan);
-    visualFamilies.push(postCreative.visualFamily);
-    pillarCounts[postPlan.pillar] = (pillarCounts[postPlan.pillar] || 0) + 1;
+      // Quality Gate Check on Post Plan
+      const postQuality = evaluateContentQuality({
+        plan: postPlan,
+        freshnessScore: postTopicAngle.freshnessScore
+      });
+      postPlan.qualityScore = postQuality.overallScore;
 
-    // 2. Reel Generation: Pick coordinated topic & complementary angle
-    // Cross-format relationship check: Reel must not duplicate Post angle
-    const reelAngle = selectComplementaryReelAngle(postPlan.angle);
-    const reelTopicAngle = selectOptimalTopicAngle(brandName, undefined, history, "REEL");
+      plans.push(postPlan);
+      visualFamilies.push(postCreative.visualFamily);
+      pillarCounts[postPlan.pillar] = (pillarCounts[postPlan.pillar] || 0) + 1;
 
-    const reelScenes = formulateReelCreativeDirection(
-      brandName,
-      `${reelTopicAngle.topic.title} · Reel`,
-      reelTopicAngle.topic.title,
-      reelAngle,
-      [...history.map((h) => ({ visualFamily: h.visualFamily, createdAt: h.createdAt })), { visualFamily: postCreative.visualFamily }],
-      profile.voice.primaryLanguage
-    );
+      history.unshift({
+        id: `tmp-${postPlan.id}`,
+        brand: postPlan.brand,
+        planId: postPlan.id,
+        format: "POST",
+        pillar: postPlan.pillar,
+        topic: postPlan.topic,
+        angle: postPlan.angle,
+        hook: postPlan.hook,
+        visualFamily: postCreative.visualFamily,
+        visualConcept: postCreative.visualMetaphor,
+        fingerprint: `${postPlan.brand}:${postPlan.topic}:${postPlan.angle}`,
+        status: "planned",
+        createdAt: postPlan.scheduledFor
+      });
+    }
 
-    const reelPlan: ReelPlan = {
-      id: `plan-reel-${brandName.toLowerCase()}-${date}-${crypto.randomUUID().slice(0, 8)}`,
-      brand: profile.name,
-      format: "REEL",
-      pillar: reelTopicAngle.topic.pillarId,
-      subPillar: reelTopicAngle.topic.subPillarId,
-      objective: "education",
-      title: `${reelTopicAngle.topic.title}: The Complete Reel Breakdown`,
-      topic: reelTopicAngle.topic.title,
-      angle: reelAngle,
-      hook: reelScenes[0]?.captionOverlayText || reelTopicAngle.narrativeHook,
-      totalDurationSeconds: reelScenes.reduce((sum, s) => sum + s.durationSeconds, 0),
-      scenes: reelScenes,
-      cta: profile.ctaStrategies.find((c) => c.objective === "education")?.primaryCta || "Save this Reel and follow for daily tech breakdowns.",
-      targetAudience: profile.targetAudiences[0]?.label || "Developers and Leaders",
-      language: profile.voice.primaryLanguage,
-      scheduledFor: reelScheduledFor,
-      status: "PLANNED"
-    };
+    let reelPlan: ReelPlan | null = null;
+    if (!reelAlreadyExists) {
+      // 2. Reel Generation: Pick coordinated topic & complementary angle
+      const reelAngle = selectComplementaryReelAngle(postPlan?.angle || "problem-vs-solution");
+      const reelTopicAngle = await selectOptimalTopicAngleWithAI(brandName, undefined, history, "REEL", ai);
+      const refVisuals = [
+        ...history.map((h) => ({ visualFamily: h.visualFamily, createdAt: h.createdAt })),
+        ...(postPlan ? [{ visualFamily: postPlan.creativeDirection.visualFamily }] : [])
+      ];
 
-    // Quality Gate Check on Reel Plan
-    const reelQuality = evaluateContentQuality({
-      plan: reelPlan,
-      freshnessScore: reelTopicAngle.freshnessScore
-    });
-    reelPlan.qualityScore = reelQuality.overallScore;
+      const reelScenes = formulateReelCreativeDirection(
+        brandName,
+        `${reelTopicAngle.topic.title} · Reel`,
+        reelTopicAngle.topic.title,
+        reelAngle,
+        refVisuals,
+        profile.voice.primaryLanguage
+      );
 
-    plans.push(reelPlan);
-    if (reelScenes[0]) visualFamilies.push(reelScenes[0].visualFamily);
-    pillarCounts[reelPlan.pillar] = (pillarCounts[reelPlan.pillar] || 0) + 1;
+      reelPlan = {
+        id: `plan-reel-${brandName.toLowerCase()}-${date}-${crypto.randomUUID().slice(0, 8)}`,
+        brand: profile.name,
+        format: "REEL",
+        pillar: reelTopicAngle.topic.pillarId,
+        subPillar: reelTopicAngle.topic.subPillarId,
+        objective: "education",
+        title: `${reelTopicAngle.topic.title}: The Complete Reel Breakdown`,
+        topic: reelTopicAngle.topic.title,
+        angle: reelAngle,
+        hook: reelScenes[0]?.captionOverlayText || reelTopicAngle.narrativeHook,
+        totalDurationSeconds: reelScenes.reduce((sum, s) => sum + s.durationSeconds, 0),
+        scenes: reelScenes,
+        cta:
+          profile.ctaStrategies.find((c) => c.objective === "education")?.primaryCta ||
+          "Save this Reel and follow for daily tech breakdowns.",
+        targetAudience: profile.targetAudiences[0]?.label || "Developers and Leaders",
+        language: profile.voice.primaryLanguage,
+        scheduledFor: reelScheduledFor,
+        status: "PLANNED"
+      };
+
+      // Quality Gate Check on Reel Plan
+      const reelQuality = evaluateContentQuality({
+        plan: reelPlan,
+        freshnessScore: reelTopicAngle.freshnessScore
+      });
+      reelPlan.qualityScore = reelQuality.overallScore;
+
+      plans.push(reelPlan);
+      if (reelScenes[0]) visualFamilies.push(reelScenes[0].visualFamily);
+      pillarCounts[reelPlan.pillar] = (pillarCounts[reelPlan.pillar] || 0) + 1;
+    }
 
     // Optional Story format (coordinated with today's post)
-    if (includeStories) {
+    if (includeStories && postPlan) {
       const storyPlan = formulateStoryPlan({
         brandName: profile.name,
         topic: postPlan.topic,
@@ -206,60 +274,58 @@ export async function generateDailyPlan(
         pillar: postPlan.pillar,
         scheduledFor: `${date}T10:00:00+05:30`,
         relatedPostOrReelId: postPlan.id,
-        history: [{ visualFamily: postCreative.visualFamily }]
+        history: [{ visualFamily: postPlan.creativeDirection.visualFamily }]
       });
       plans.push(storyPlan);
     }
 
     // If NOT a dry-run, persist to memory store, D1, and create background jobs
     if (!dryRun) {
-      PLANS_STORE.set(postPlan.id, postPlan);
-      PLANS_STORE.set(reelPlan.id, reelPlan);
-
-      if (db) {
-        await savePlanToD1(postPlan, db);
-        await savePlanToD1(reelPlan, db);
+      if (postPlan) {
+        PLANS_STORE.set(postPlan.id, postPlan);
+        if (db) await savePlanToD1(postPlan, db);
+        await recordContentMemory(
+          {
+            brand: postPlan.brand,
+            planId: postPlan.id,
+            format: "POST",
+            pillar: postPlan.pillar,
+            topic: postPlan.topic,
+            angle: postPlan.angle,
+            hook: postPlan.hook,
+            visualFamily: postPlan.creativeDirection.visualFamily,
+            visualConcept: postPlan.creativeDirection.visualMetaphor,
+            fingerprint: `${postPlan.brand}:${postPlan.topic}:${postPlan.angle}`,
+            status: "planned"
+          },
+          db,
+          assets
+        );
+        await createContentJob(postPlan, db);
       }
 
-      await recordContentMemory(
-        {
-          brand: postPlan.brand,
-          planId: postPlan.id,
-          format: "POST",
-          pillar: postPlan.pillar,
-          topic: postPlan.topic,
-          angle: postPlan.angle,
-          hook: postPlan.hook,
-          visualFamily: postCreative.visualFamily,
-          visualConcept: postCreative.visualMetaphor,
-          fingerprint: `${postPlan.brand}:${postPlan.topic}:${postPlan.angle}`,
-          status: "planned"
-        },
-        db,
-        assets
-      );
-
-      await recordContentMemory(
-        {
-          brand: reelPlan.brand,
-          planId: reelPlan.id,
-          format: "REEL",
-          pillar: reelPlan.pillar,
-          topic: reelPlan.topic,
-          angle: reelPlan.angle,
-          hook: reelPlan.hook,
-          visualFamily: reelScenes[0]?.visualFamily || "cinematic",
-          visualConcept: reelScenes[0]?.subjectAction || "Reel Scene Storyboard",
-          fingerprint: `${reelPlan.brand}:${reelPlan.topic}:${reelPlan.angle}`,
-          status: "planned"
-        },
-        db,
-        assets
-      );
-
-      // Create jobs in state machine
-      await createContentJob(postPlan, db);
-      await createContentJob(reelPlan, db);
+      if (reelPlan) {
+        PLANS_STORE.set(reelPlan.id, reelPlan);
+        if (db) await savePlanToD1(reelPlan, db);
+        await recordContentMemory(
+          {
+            brand: reelPlan.brand,
+            planId: reelPlan.id,
+            format: "REEL",
+            pillar: reelPlan.pillar,
+            topic: reelPlan.topic,
+            angle: reelPlan.angle,
+            hook: reelPlan.hook,
+            visualFamily: reelPlan.scenes[0]?.visualFamily || "cinematic",
+            visualConcept: reelPlan.scenes[0]?.subjectAction || "Reel Scene Storyboard",
+            fingerprint: `${reelPlan.brand}:${reelPlan.topic}:${reelPlan.angle}`,
+            status: "planned"
+          },
+          db,
+          assets
+        );
+        await createContentJob(reelPlan, db);
+      }
     }
   }
 
@@ -303,12 +369,13 @@ export async function generateTenDayPlan(
     brands?: string[];
     db?: D1DatabaseLike;
     assets?: R2BucketLike;
+    ai?: any;
   } = {}
 ): Promise<TenDayPlanResult> {
-  const { startDate, brands = ["Zawaago", "InnoTech"], db, assets } = options;
+  const { startDate, brands = ["Zawaago", "InnoTech"], db, assets, ai } = options;
   const batchId = `batch-10day-${Date.now()}-${crypto.randomUUID().slice(0, 6)}`;
 
-  const baseDate = startDate ? new Date(startDate) : new Date();
+  const resolvedStartDate = startDate ? startDate.slice(0, 10) : getIstDateString();
   const dailyPlans: DailyStrategyPlan[] = [];
   const allGeneratedPlans: UnifiedContentPlan[] = [];
   const allVisualFamilies: VisualFamily[] = [];
@@ -321,8 +388,7 @@ export async function generateTenDayPlan(
   }
 
   for (let dayIdx = 0; dayIdx < 10; dayIdx++) {
-    const currentDay = new Date(baseDate.getTime() + dayIdx * 24 * 60 * 60 * 1000);
-    const dateStr = currentDay.toISOString().slice(0, 10);
+    const dateStr = addDaysToDateString(resolvedStartDate, dayIdx);
     const dayPlans: UnifiedContentPlan[] = [];
     const dayVisualFamilies: VisualFamily[] = [];
     const pillarCounts: Record<string, number> = {};
@@ -331,171 +397,175 @@ export async function generateTenDayPlan(
       const profile = getBrandProfile(brandName);
       const brandHistory = runningMemoryByBrand.get(brandName) || [];
 
-      // Scheduling policy:
-      // Zawaago: 12:30 PM Post, 6:30 PM Reel
-      // InnoTech: 1:00 PM Post, 7:00 PM Reel
       const postTime = brandName.toLowerCase().includes("inno") ? "13:00" : "12:30";
       const reelTime = brandName.toLowerCase().includes("inno") ? "19:00" : "18:30";
 
       const postScheduledFor = `${dateStr}T${postTime}:00+05:30`;
       const reelScheduledFor = `${dateStr}T${reelTime}:00+05:30`;
 
-      // 1. Post: select optimal topic & angle with anti-repetition check against 30-day history + running 10-day plans
-      const postTopicAngle = selectOptimalTopicAngle(brandName, undefined, brandHistory, "POST");
-      const postCreative = formulatePostCreativeDirection(
-        brandName,
-        postTopicAngle.topic.title,
-        postTopicAngle.angle,
-        brandHistory.map((h: any) => ({ visualFamily: h.visualFamily, createdAt: h.createdAt })),
-        profile.formatPreferences.postAspectRatio
-      );
+      const postAlreadyExists = await hasPlanForBrandFormatDateD1(profile.name, "POST", dateStr, db);
+      const reelAlreadyExists = await hasPlanForBrandFormatDateD1(profile.name, "REEL", dateStr, db);
 
-      const postPlan: PostPlan = {
-        id: `plan-post-${brandName.toLowerCase()}-${dateStr}-${crypto.randomUUID().slice(0, 8)}`,
-        brand: profile.name,
-        format: "POST",
-        pillar: postTopicAngle.topic.pillarId,
-        subPillar: postTopicAngle.topic.subPillarId,
-        objective: postTopicAngle.objective,
-        topic: postTopicAngle.topic.title,
-        angle: postTopicAngle.angle,
-        hook: postTopicAngle.narrativeHook,
-        captionBrief: `Actionable, high-signal breakdown of ${postTopicAngle.topic.title} through the lens of ${postTopicAngle.angle}.`,
-        cta: profile.ctaStrategies[0]?.primaryCta || "Follow for more insights.",
-        targetAudience: profile.targetAudiences[0]?.label || "Business Owners and Leaders",
-        language: profile.voice.primaryLanguage,
-        scheduledFor: postScheduledFor,
-        creativeDirection: postCreative,
-        status: "PLANNED",
-        dayIndex: dayIdx + 1,
-        planBatchId: batchId
-      };
+      let postPlan: PostPlan | null = null;
+      if (!postAlreadyExists) {
+        const postTopicAngle = await selectOptimalTopicAngleWithAI(brandName, undefined, brandHistory, "POST", ai);
+        const postCreative = formulatePostCreativeDirection(
+          brandName,
+          postTopicAngle.topic.title,
+          postTopicAngle.angle,
+          brandHistory.map((h: any) => ({ visualFamily: h.visualFamily, createdAt: h.createdAt })),
+          profile.formatPreferences.postAspectRatio
+        );
 
-      const postQuality = evaluateContentQuality({
-        plan: postPlan,
-        freshnessScore: postTopicAngle.freshnessScore
-      });
-      postPlan.qualityScore = postQuality.overallScore;
-
-      dayPlans.push(postPlan);
-      dayVisualFamilies.push(postCreative.visualFamily);
-      allVisualFamilies.push(postCreative.visualFamily);
-      pillarCounts[postPlan.pillar] = (pillarCounts[postPlan.pillar] || 0) + 1;
-
-      brandHistory.push({
-        brand: postPlan.brand,
-        topic: postPlan.topic,
-        angle: postPlan.angle,
-        visualFamily: postCreative.visualFamily,
-        visualConcept: postCreative.visualMetaphor,
-        createdAt: postPlan.scheduledFor
-      });
-
-      // 2. Reel: pick complementary angle and distinct topic
-      const reelAngle = selectComplementaryReelAngle(postPlan.angle);
-      const reelTopicAngle = selectOptimalTopicAngle(brandName, undefined, brandHistory, "REEL");
-
-      const reelScenes = formulateReelCreativeDirection(
-        brandName,
-        `${reelTopicAngle.topic.title} · Reel`,
-        reelTopicAngle.topic.title,
-        reelAngle,
-        [...brandHistory.map((h: any) => ({ visualFamily: h.visualFamily, createdAt: h.createdAt })), { visualFamily: postCreative.visualFamily }],
-        profile.voice.primaryLanguage
-      );
-
-      const reelPlan: ReelPlan = {
-        id: `plan-reel-${brandName.toLowerCase()}-${dateStr}-${crypto.randomUUID().slice(0, 8)}`,
-        brand: profile.name,
-        format: "REEL",
-        pillar: reelTopicAngle.topic.pillarId,
-        subPillar: reelTopicAngle.topic.subPillarId,
-        objective: "education",
-        title: `${reelTopicAngle.topic.title}: The Complete Reel Breakdown`,
-        topic: reelTopicAngle.topic.title,
-        angle: reelAngle,
-        hook: reelScenes[0]?.captionOverlayText || reelTopicAngle.narrativeHook,
-        totalDurationSeconds: reelScenes.reduce((sum, s) => sum + s.durationSeconds, 0),
-        scenes: reelScenes,
-        cta: profile.ctaStrategies.find((c) => c.objective === "education")?.primaryCta || "Save this Reel and follow for daily tech breakdowns.",
-        targetAudience: profile.targetAudiences[0]?.label || "Developers and Leaders",
-        language: profile.voice.primaryLanguage,
-        scheduledFor: reelScheduledFor,
-        status: "PLANNED",
-        dayIndex: dayIdx + 1,
-        planBatchId: batchId
-      };
-
-      const reelQuality = evaluateContentQuality({
-        plan: reelPlan,
-        freshnessScore: reelTopicAngle.freshnessScore
-      });
-      reelPlan.qualityScore = reelQuality.overallScore;
-
-      dayPlans.push(reelPlan);
-      if (reelScenes[0]) {
-        dayVisualFamilies.push(reelScenes[0].visualFamily);
-        allVisualFamilies.push(reelScenes[0].visualFamily);
-      }
-      pillarCounts[reelPlan.pillar] = (pillarCounts[reelPlan.pillar] || 0) + 1;
-
-      brandHistory.push({
-        brand: reelPlan.brand,
-        topic: reelPlan.topic,
-        angle: reelPlan.angle,
-        visualFamily: reelScenes[0]?.visualFamily || "cinematic",
-        visualConcept: reelScenes[0]?.subjectAction || "Reel Scene Storyboard",
-        createdAt: reelPlan.scheduledFor
-      });
-
-      // Persist in memory store and D1 architecture
-      PLANS_STORE.set(postPlan.id, postPlan);
-      PLANS_STORE.set(reelPlan.id, reelPlan);
-      if (db) {
-        await savePlanToD1(postPlan, db);
-        await savePlanToD1(reelPlan, db);
-      }
-
-      await recordContentMemory(
-        {
-          brand: postPlan.brand,
-          planId: postPlan.id,
+        postPlan = {
+          id: `plan-post-${brandName.toLowerCase()}-${dateStr}-${crypto.randomUUID().slice(0, 8)}`,
+          brand: profile.name,
           format: "POST",
-          pillar: postPlan.pillar,
+          pillar: postTopicAngle.topic.pillarId,
+          subPillar: postTopicAngle.topic.subPillarId,
+          objective: postTopicAngle.objective,
+          topic: postTopicAngle.topic.title,
+          angle: postTopicAngle.angle,
+          hook: postTopicAngle.narrativeHook,
+          captionBrief: `Actionable, high-signal breakdown of ${postTopicAngle.topic.title} through the lens of ${postTopicAngle.angle}.`,
+          cta: profile.ctaStrategies[0]?.primaryCta || "Follow for more insights.",
+          targetAudience: profile.targetAudiences[0]?.label || "Business Owners and Leaders",
+          language: profile.voice.primaryLanguage,
+          scheduledFor: postScheduledFor,
+          creativeDirection: postCreative,
+          status: "PLANNED",
+          dayIndex: dayIdx + 1,
+          planBatchId: batchId
+        };
+
+        const postQuality = evaluateContentQuality({
+          plan: postPlan,
+          freshnessScore: postTopicAngle.freshnessScore
+        });
+        postPlan.qualityScore = postQuality.overallScore;
+
+        dayPlans.push(postPlan);
+        dayVisualFamilies.push(postCreative.visualFamily);
+        allVisualFamilies.push(postCreative.visualFamily);
+        pillarCounts[postPlan.pillar] = (pillarCounts[postPlan.pillar] || 0) + 1;
+
+        brandHistory.push({
+          brand: postPlan.brand,
           topic: postPlan.topic,
           angle: postPlan.angle,
-          hook: postPlan.hook,
           visualFamily: postCreative.visualFamily,
           visualConcept: postCreative.visualMetaphor,
-          fingerprint: `${postPlan.brand}:${postPlan.topic}:${postPlan.angle}`,
-          status: "planned"
-        },
-        db,
-        assets
-      );
+          createdAt: postPlan.scheduledFor
+        });
 
-      await recordContentMemory(
-        {
-          brand: reelPlan.brand,
-          planId: reelPlan.id,
+        PLANS_STORE.set(postPlan.id, postPlan);
+        if (db) await savePlanToD1(postPlan, db);
+        await recordContentMemory(
+          {
+            brand: postPlan.brand,
+            planId: postPlan.id,
+            format: "POST",
+            pillar: postPlan.pillar,
+            topic: postPlan.topic,
+            angle: postPlan.angle,
+            hook: postPlan.hook,
+            visualFamily: postCreative.visualFamily,
+            visualConcept: postCreative.visualMetaphor,
+            fingerprint: `${postPlan.brand}:${postPlan.topic}:${postPlan.angle}`,
+            status: "planned"
+          },
+          db,
+          assets
+        );
+        await createContentJob(postPlan, db);
+        allGeneratedPlans.push(postPlan);
+      }
+
+      if (!reelAlreadyExists) {
+        const reelAngle = selectComplementaryReelAngle(postPlan?.angle || "problem-vs-solution");
+        const reelTopicAngle = await selectOptimalTopicAngleWithAI(brandName, undefined, brandHistory, "REEL", ai);
+        const refVisuals = [
+          ...brandHistory.map((h: any) => ({ visualFamily: h.visualFamily, createdAt: h.createdAt })),
+          ...(postPlan ? [{ visualFamily: postPlan.creativeDirection.visualFamily }] : [])
+        ];
+
+        const reelScenes = formulateReelCreativeDirection(
+          brandName,
+          `${reelTopicAngle.topic.title} · Reel`,
+          reelTopicAngle.topic.title,
+          reelAngle,
+          refVisuals,
+          profile.voice.primaryLanguage
+        );
+
+        const reelPlan: ReelPlan = {
+          id: `plan-reel-${brandName.toLowerCase()}-${dateStr}-${crypto.randomUUID().slice(0, 8)}`,
+          brand: profile.name,
           format: "REEL",
-          pillar: reelPlan.pillar,
+          pillar: reelTopicAngle.topic.pillarId,
+          subPillar: reelTopicAngle.topic.subPillarId,
+          objective: "education",
+          title: `${reelTopicAngle.topic.title}: The Complete Reel Breakdown`,
+          topic: reelTopicAngle.topic.title,
+          angle: reelAngle,
+          hook: reelScenes[0]?.captionOverlayText || reelTopicAngle.narrativeHook,
+          totalDurationSeconds: reelScenes.reduce((sum, s) => sum + s.durationSeconds, 0),
+          scenes: reelScenes,
+          cta:
+            profile.ctaStrategies.find((c) => c.objective === "education")?.primaryCta ||
+            "Save this Reel and follow for daily tech breakdowns.",
+          targetAudience: profile.targetAudiences[0]?.label || "Developers and Leaders",
+          language: profile.voice.primaryLanguage,
+          scheduledFor: reelScheduledFor,
+          status: "PLANNED",
+          dayIndex: dayIdx + 1,
+          planBatchId: batchId
+        };
+
+        const reelQuality = evaluateContentQuality({
+          plan: reelPlan,
+          freshnessScore: reelTopicAngle.freshnessScore
+        });
+        reelPlan.qualityScore = reelQuality.overallScore;
+
+        dayPlans.push(reelPlan);
+        if (reelScenes[0]) {
+          dayVisualFamilies.push(reelScenes[0].visualFamily);
+          allVisualFamilies.push(reelScenes[0].visualFamily);
+        }
+        pillarCounts[reelPlan.pillar] = (pillarCounts[reelPlan.pillar] || 0) + 1;
+
+        brandHistory.push({
+          brand: reelPlan.brand,
           topic: reelPlan.topic,
           angle: reelPlan.angle,
-          hook: reelPlan.hook,
           visualFamily: reelScenes[0]?.visualFamily || "cinematic",
           visualConcept: reelScenes[0]?.subjectAction || "Reel Scene Storyboard",
-          fingerprint: `${reelPlan.brand}:${reelPlan.topic}:${reelPlan.angle}`,
-          status: "planned"
-        },
-        db,
-        assets
-      );
+          createdAt: reelPlan.scheduledFor
+        });
 
-      await createContentJob(postPlan, db);
-      await createContentJob(reelPlan, db);
-
-      allGeneratedPlans.push(postPlan, reelPlan);
+        PLANS_STORE.set(reelPlan.id, reelPlan);
+        if (db) await savePlanToD1(reelPlan, db);
+        await recordContentMemory(
+          {
+            brand: reelPlan.brand,
+            planId: reelPlan.id,
+            format: "REEL",
+            pillar: reelPlan.pillar,
+            topic: reelPlan.topic,
+            angle: reelPlan.angle,
+            hook: reelPlan.hook,
+            visualFamily: reelScenes[0]?.visualFamily || "cinematic",
+            visualConcept: reelScenes[0]?.subjectAction || "Reel Scene Storyboard",
+            fingerprint: `${reelPlan.brand}:${reelPlan.topic}:${reelPlan.angle}`,
+            status: "planned"
+          },
+          db,
+          assets
+        );
+        await createContentJob(reelPlan, db);
+        allGeneratedPlans.push(reelPlan);
+      }
     }
 
     const visualDiversityScore = calculateDiversityIndex(dayVisualFamilies);
@@ -510,11 +580,11 @@ export async function generateTenDayPlan(
   }
 
   const overallVisualDiversityIndex = calculateDiversityIndex(allVisualFamilies);
-  const endDate = new Date(baseDate.getTime() + 9 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const endDate = addDaysToDateString(resolvedStartDate, 9);
 
   return {
     batchId,
-    startDate: baseDate.toISOString().slice(0, 10),
+    startDate: resolvedStartDate,
     endDate,
     totalDays: 10,
     totalPlans: allGeneratedPlans.length,
@@ -522,6 +592,46 @@ export async function generateTenDayPlan(
     overallVisualDiversityIndex,
     allPlans: allGeneratedPlans
   };
+}
+
+/**
+ * Ensures rolling daily content plans exist for [todayIst .. todayIst + daysAhead - 1]
+ * without touching already-planned or published slots and without pre-generating images.
+ */
+export async function ensureRollingPlans(
+  env: { DB?: D1DatabaseLike; ASSETS?: R2BucketLike; AI?: any },
+  daysAhead = 10
+): Promise<{ datesChecked: number; plansCreated: number }> {
+  const todayIst = getIstDateString();
+  const limit = Math.min(14, Math.max(1, daysAhead));
+  let plansCreated = 0;
+
+  for (let i = 0; i < limit; i++) {
+    const targetDate = addDaysToDateString(todayIst, i);
+    const needZawPost = !(await hasPlanForBrandFormatDateD1("Zawaago", "POST", targetDate, env.DB));
+    const needInnoPost = !(await hasPlanForBrandFormatDateD1("InnoTech", "POST", targetDate, env.DB));
+    const needZawReel = !(await hasPlanForBrandFormatDateD1("Zawaago", "REEL", targetDate, env.DB));
+    const needInnoReel = !(await hasPlanForBrandFormatDateD1("InnoTech", "REEL", targetDate, env.DB));
+
+    if (!needZawPost && !needInnoPost && !needZawReel && !needInnoReel) {
+      continue;
+    }
+
+    const daily = await generateDailyPlan(
+      {
+        date: targetDate,
+        brands: ["Zawaago", "InnoTech"],
+        includeStories: false,
+        dryRun: false,
+        ai: env.AI
+      },
+      env.DB,
+      env.ASSETS
+    );
+    plansCreated += daily.plans.length;
+  }
+
+  return { datesChecked: limit, plansCreated };
 }
 
 /**

@@ -275,3 +275,28 @@ export async function getMemoryStats(brand?: string, db?: D1DatabaseLike) {
     latestRecord: records[0] || null
   };
 }
+
+export async function markContentMemoryPublished(
+  planId: string,
+  publishedAt: string,
+  db?: D1DatabaseLike
+): Promise<void> {
+  for (const item of IN_MEMORY_STORE) {
+    if (item.planId === planId) {
+      item.status = "published";
+      item.publishedAt = publishedAt;
+    }
+  }
+
+  if (db) {
+    try {
+      await db
+        .prepare(`UPDATE content_memory SET status = 'published', published_at = ? WHERE plan_id = ?`)
+        .bind(publishedAt, planId)
+        .run();
+    } catch (err) {
+      console.warn("D1 markContentMemoryPublished error:", err);
+    }
+  }
+}
+
