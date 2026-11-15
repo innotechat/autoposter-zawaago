@@ -327,8 +327,25 @@ contentEngineRoutes.post("/content-engine/plans/:id/reschedule", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { scheduledFor?: string };
   if (!body.scheduledFor) return c.json({ ok: false, error: "Missing scheduledFor timestamp" }, 400);
 
-  const updated = updatePlan(id, { scheduledFor: body.scheduledFor });
-  if (c.env.DB) await updatePlanInD1(id, { scheduledFor: body.scheduledFor }, c.env.DB);
+  const updated = updatePlan(id, { scheduledFor: body.scheduledFor, errorMessage: undefined });
+  if (c.env.DB) await updatePlanInD1(id, { scheduledFor: body.scheduledFor, errorMessage: undefined }, c.env.DB);
+  if (c.env.ASSETS) {
+    try {
+      const existing = await c.env.ASSETS.get(`schedules/${id}.json`);
+      if (existing) {
+        const rec = (await existing.json()) as Record<string, unknown>;
+        if (rec.status === "scheduled" || rec.status === "failed") {
+          await c.env.ASSETS.put(
+            `schedules/${id}.json`,
+            JSON.stringify({ ...rec, scheduledAt: body.scheduledFor, status: "scheduled", nextRetryAt: undefined, error: undefined }),
+            { httpMetadata: { contentType: "application/json", cacheControl: "no-store" } }
+          );
+        }
+      }
+    } catch (err) {
+      console.warn("R2 schedule reschedule sync warning:", err);
+    }
+  }
   return c.json({ ok: true, plan: updated, message: "Plan rescheduled." });
 });
 
@@ -343,6 +360,23 @@ contentEngineRoutes.post("/content-engine/plans/:id/cancel", async (c) => {
 
   const updated = updatePlan(id, { status: "CANCELLED" });
   if (c.env.DB) await updatePlanInD1(id, { status: "CANCELLED" }, c.env.DB);
+  if (c.env.ASSETS) {
+    try {
+      const existing = await c.env.ASSETS.get(`schedules/${id}.json`);
+      if (existing) {
+        const rec = (await existing.json()) as Record<string, unknown>;
+        if (rec.status !== "published") {
+          await c.env.ASSETS.put(
+            `schedules/${id}.json`,
+            JSON.stringify({ ...rec, status: "cancelled" }),
+            { httpMetadata: { contentType: "application/json", cacheControl: "no-store" } }
+          );
+        }
+      }
+    } catch (err) {
+      console.warn("R2 schedule cancel sync warning:", err);
+    }
+  }
   return c.json({ ok: true, plan: updated, message: "Plan cancelled." });
 });
 

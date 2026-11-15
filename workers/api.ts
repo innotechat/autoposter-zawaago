@@ -12,8 +12,8 @@ type Env = {
 
 export const apiRoutes = new Hono<{ Bindings: Env }>();
 
-const GRAPH_VERSION = "v25.0";
-const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
+export const GRAPH_VERSION = "v25.0";
+export const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
 export type Brief = {
   topic: string;
