@@ -44,14 +44,20 @@ galleryRoutes.get("/gallery/assets", async (c) => {
   return c.json({ ok: true, assets, cursor: listed.truncated ? listed.cursor : null });
 });
 
-galleryRoutes.get("/gallery/asset/*", async (c) => {
-  if (!c.env.ASSETS) return c.text("Image storage is not configured", 503);
+galleryRoutes.on(["GET", "HEAD"], "/gallery/asset/*", async (c) => {
+  if (!c.env.ASSETS) return jsonError(c, 503, "Image storage is not configured");
   let key: string;
   try { key = safeAssetKey(c.req.path.replace("/api/gallery/asset/", "")); } catch (error) { return jsonError(c, 400, error instanceof Error ? error.message : "Invalid asset key."); }
   if (!assetBrand(key)) return jsonError(c, 400, "Invalid asset namespace.");
+  if (c.req.method === "HEAD") {
+    const headObj = await c.env.ASSETS.head(key);
+    if (!headObj) return jsonError(c, 404, "Asset not found.");
+    const headers = new Headers(); headObj.writeHttpMetadata(headers); headers.set("etag", headObj.httpEtag); headers.set("content-length", String(headObj.size)); headers.set("accept-ranges", "bytes"); headers.set("access-control-allow-origin", "*"); headers.set("cache-control", "public, max-age=31536000, immutable");
+    return new Response(null, { status: 200, headers });
+  }
   const object = await c.env.ASSETS.get(key);
   if (!object) return jsonError(c, 404, "Asset not found.");
-  const headers = new Headers(); object.writeHttpMetadata(headers); headers.set("etag", object.httpEtag); headers.set("cache-control", "public, max-age=31536000, immutable");
+  const headers = new Headers(); object.writeHttpMetadata(headers); headers.set("etag", object.httpEtag); headers.set("content-length", String(object.size)); headers.set("accept-ranges", "bytes"); headers.set("access-control-allow-origin", "*"); headers.set("cache-control", "public, max-age=31536000, immutable");
   return new Response(object.body, { headers });
 });
 

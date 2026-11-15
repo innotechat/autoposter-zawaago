@@ -15,6 +15,7 @@ import {
   UploadSimple,
   WarningCircle,
 } from "@phosphor-icons/react";
+import { resolveAssetUrl } from "../lib/asset-url";
 
 type BrandName = "Zawaago" | "InnoTech" | "None" | "Custom";
 type CreationMode = "sync" | "topic" | "upload";
@@ -160,6 +161,10 @@ export default function ReelComposer() {
     if (audioUrl) URL.revokeObjectURL(audioUrl);
   }, [audioUrl]);
 
+  useEffect(() => () => {
+    if (videoUrl.startsWith("blob:")) URL.revokeObjectURL(videoUrl);
+  }, [videoUrl]);
+
   async function loadReelsHistory(selected = reelsFilter) {
     setLoadingReelsHistory(true);
     try {
@@ -201,8 +206,9 @@ export default function ReelComposer() {
   }
 
   function loadReelIntoStudio(item: ReelHistoryItem) {
-    setVideoUrl(item.videoUrl);
-    setSavedVideoUrl(item.videoUrl);
+    const resolved = resolveAssetUrl(item.videoUrl, { absolute: true });
+    setVideoUrl(resolved);
+    setSavedVideoUrl(resolved);
     setVideoMime("video/mp4");
     if (item.brand && item.brand !== "None" && item.brand !== "Custom") {
       setBranding(item.brand as BrandName);
@@ -376,6 +382,8 @@ export default function ReelComposer() {
     setBusy("render");
     setError("");
 
+    let ac: AudioContext | null = null;
+    let stream: MediaStream | null = null;
     try {
       const sourceAudioUrl = await getAudioUrl();
       const audio = new Audio(sourceAudioUrl);
@@ -400,15 +408,15 @@ export default function ReelComposer() {
         logoImg = await loadImage(customLogoUrl);
       }
 
-      const imgs = await Promise.all(storyboard.scenes.map((s) => loadImage(s.imageUrl!)));
+      const imgs = await Promise.all(storyboard.scenes.map((s) => loadImage(resolveAssetUrl(s.imageUrl!))));
 
       const vs = canvas.captureStream(30);
-      const ac = new AudioContext();
+      ac = new AudioContext();
       const src = ac.createMediaElementSource(audio);
       const dest = ac.createMediaStreamDestination();
       src.connect(dest);
       src.connect(ac.destination);
-      const stream = new MediaStream([...vs.getVideoTracks(), ...dest.stream.getAudioTracks()]);
+      stream = new MediaStream([...vs.getVideoTracks(), ...dest.stream.getAudioTracks()]);
       const mime = ["video/mp4;codecs=avc1.424028,mp4a.40.2", "video/mp4"].find((x) => MediaRecorder.isTypeSupported(x));
       if (!mime) throw new Error("Production MP4 is not supported by this browser.");
 
@@ -475,9 +483,7 @@ export default function ReelComposer() {
           requestAnimationFrame(draw);
         } else {
           audio.pause();
-          rec.stop();
-          stream.getTracks().forEach((t) => t.stop());
-          void ac.close();
+          if (rec.state !== "inactive") rec.stop();
         }
       };
 
@@ -485,6 +491,7 @@ export default function ReelComposer() {
       await done;
 
       const out = new Blob(chunks, { type: mime });
+      if (out.size < 1000) throw new Error("Rendered Reel video was empty. Keep this browser tab active while rendering and try again.");
       const url = URL.createObjectURL(out);
       setVideoUrl(url);
       setVideoMime(mime);
@@ -493,6 +500,8 @@ export default function ReelComposer() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      stream?.getTracks().forEach((t) => t.stop());
+      if (ac && ac.state !== "closed") void ac.close();
       setBusy(null);
     }
   }
@@ -930,16 +939,16 @@ export default function ReelComposer() {
           <div className="reel-preview-head">
             <div>
               <strong>▶ Reel Video Preview</strong>
-              <small>{videoMime}</small>
+              <small>{videoMime || "video/mp4"}</small>
             </div>
             {savedVideoUrl && <span>R2 SAVED</span>}
           </div>
-          <video src={videoUrl} controls playsInline preload="metadata" />
+          <video key={resolveAssetUrl(videoUrl)} src={resolveAssetUrl(videoUrl)} controls playsInline preload="metadata" />
 
           {savedVideoUrl && (
             <div className="reel-r2-meta">
               <span>Cloudflare R2 Asset:</span>
-              <code>{savedVideoUrl}</code>
+              <code>{resolveAssetUrl(savedVideoUrl, { absolute: true })}</code>
               <button
                 type="button"
                 className="reel-copy-btn"
@@ -964,7 +973,7 @@ export default function ReelComposer() {
           )}
 
           <div className="reel-actions">
-            <a href={videoUrl} download={`${pageName.toLowerCase()}-reel.mp4`}>
+            <a href={resolveAssetUrl(videoUrl)} download={`${pageName.toLowerCase()}-reel.mp4`}>
               ⬇ Download MP4
             </a>
             {!savedVideoUrl && (
@@ -973,7 +982,7 @@ export default function ReelComposer() {
               </button>
             )}
             {savedVideoUrl && (
-              <a href={savedVideoUrl} target="_blank" rel="noreferrer">
+              <a href={resolveAssetUrl(savedVideoUrl)} target="_blank" rel="noreferrer">
                 Open saved asset ↗
               </a>
             )}
@@ -1057,13 +1066,23 @@ export default function ReelComposer() {
           </div>
         ) : (
           <div className="reel-d1-grid">
-            {reelsHistory.map((item) => (
+            {reelsHistory.map((item) => {
+              const cardVideoUrl = resolveAssetUrl(item.videoUrl);
+              const cardThumbUrl = resolveAssetUrl(item.thumbnailUrl);
+              return (
               <div key={item.id} className="reel-card-item">
                 <div className="reel-card-preview">
-                  {item.thumbnailUrl ? (
-                    <img src={item.thumbnailUrl} alt={item.title} loading="lazy" />
-                  ) : item.videoUrl ? (
-                    <video src={item.videoUrl} preload="metadata" muted playsInline />
+                  {cardVideoUrl ? (
+                    <video
+                      key={cardVideoUrl}
+                      src={cardVideoUrl}
+                      poster={cardThumbUrl || undefined}
+                      controls
+                      preload="metadata"
+                      playsInline
+                    />
+                  ) : cardThumbUrl ? (
+                    <img src={cardThumbUrl} alt={item.title} loading="lazy" />
                   ) : (
                     <FilmStrip size={32} color="#555" />
                   )}
@@ -1095,7 +1114,7 @@ export default function ReelComposer() {
                       <Play size={13} /> Load
                     </button>
                     <a
-                      href={item.videoUrl}
+                      href={cardVideoUrl}
                       download={`${(item.brand || "reel").toLowerCase()}-${item.id}.mp4`}
                       className="reel-card-btn"
                       title="Download MP4"
@@ -1106,7 +1125,7 @@ export default function ReelComposer() {
                       type="button"
                       className="reel-card-btn"
                       onClick={() => {
-                        navigator.clipboard.writeText(item.videoUrl);
+                        navigator.clipboard.writeText(resolveAssetUrl(item.videoUrl, { absolute: true }));
                         setStatus("Copied R2 asset URL.");
                       }}
                       title="Copy public R2 URL"
@@ -1124,7 +1143,8 @@ export default function ReelComposer() {
                   </div>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

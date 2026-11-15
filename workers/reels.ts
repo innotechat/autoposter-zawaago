@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { updateReelStatusByUrl } from "./reels-d1";
+import { sanitizeHistoryError, writeHistory } from "./history";
 
 type Env = {
   FB_TOKEN_ZAWAAGO?: string;
@@ -40,22 +41,19 @@ function graphError(data: any, fallback: string) {
 
 async function verifyR2Video(env: Env, videoUrl: string, request?: Request) {
   if (!env.ASSETS) throw new Error("Asset storage is not configured.");
-  const url = new URL(videoUrl);
-  if (request) {
-    const origin = new URL(request.url).origin;
-    const prefix = "/api/autoposter/assets/";
-    if (url.origin !== origin || !url.pathname.startsWith(prefix)) throw new Error("Reel must be a video stored in this Autoposter R2 bucket.");
-  }
+  const requestOrigin = request ? new URL(request.url).origin : "";
+  const url = requestOrigin ? new URL(videoUrl, requestOrigin) : new URL(videoUrl);
   const prefix = "/api/autoposter/assets/";
-  if (!url.pathname.startsWith(prefix)) throw new Error("Invalid Reel asset URL.");
+  if (!url.pathname.startsWith(prefix)) throw new Error("Reel must be a video stored in this Autoposter R2 bucket.");
   const objectKey = decodeURIComponent(url.pathname.slice(prefix.length));
   if (!objectKey.startsWith("generated/") || objectKey.includes("..")) throw new Error("Invalid Reel asset path.");
   const object = await env.ASSETS.get(objectKey);
   if (!object) throw new Error("Reel video asset is no longer available in R2.");
   const contentType = (object.httpMetadata?.contentType || "").toLowerCase();
-  if (contentType !== "video/mp4") throw new Error("Facebook Reel publishing requires an MP4 asset. Render an MP4 Reel before publishing.");
+  if (contentType && contentType !== "video/mp4") throw new Error("Facebook Reel publishing requires an MP4 asset. Render an MP4 Reel before publishing.");
   if (object.size < 1000) throw new Error("Reel video asset is unexpectedly small.");
-  return { objectKey, size: object.size };
+  const normalizedUrl = requestOrigin ? `${requestOrigin}${url.pathname}${url.search}` : url.toString();
+  return { objectKey, size: object.size, normalizedUrl };
 }
 
 async function graphJson(url: string, init: RequestInit) {
@@ -100,23 +98,62 @@ export async function publishFacebookReel(env: Env, pageName: BrandName, videoUr
 }
 
 reelRoutes.post("/autoposter/reels/publish", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const caption = String(body.caption || body.description || "").trim();
+  const title = String(body.title || "").trim().slice(0, 100);
+  const videoUrl = String(body.videoUrl || "").trim();
+  let pageName: BrandName | null = null;
+  let resolvedUrl = videoUrl;
+  const historyId = crypto.randomUUID();
+
   try {
-    const body = await c.req.json().catch(() => ({}));
-    const pageName = normalizeBrand(String(body.page || body.pageName || "Zawaago"));
-    const caption = String(body.caption || body.description || "").trim();
-    const title = String(body.title || "").trim().slice(0, 100);
-    const videoUrl = String(body.videoUrl || "").trim();
+    pageName = normalizeBrand(String(body.page || body.pageName || "Zawaago"));
     if (!caption) return c.json({ error: "Reel caption is required." }, 400);
     if (!videoUrl) return c.json({ error: "Reel video URL is required." }, 400);
-    await verifyR2Video(c.env, videoUrl, c.req.raw);
-    const result = await publishFacebookReel(c.env, pageName, videoUrl, caption, title);
+    const verified = await verifyR2Video(c.env, videoUrl, c.req.raw);
+    resolvedUrl = verified.normalizedUrl;
+    const result = await publishFacebookReel(c.env, pageName, resolvedUrl, caption, title);
     try {
       await updateReelStatusByUrl(c.env, videoUrl, "published", { facebookVideoId: result.videoId });
     } catch (e) {
       console.warn("Could not update D1 reel status:", e);
     }
-    return c.json({ ok: true, ...result });
+    try {
+      await writeHistory(c.env, {
+        id: historyId,
+        pageName,
+        pageId: result.pageId,
+        contentType: "reel",
+        caption,
+        videoUrl: resolvedUrl,
+        facebookPostId: result.videoId,
+        status: "published",
+        createdAt: new Date().toISOString(),
+      });
+    } catch (histErr) {
+      console.warn("Could not write Reel publish history:", sanitizeHistoryError(histErr));
+    }
+    return c.json({ ok: true, historyId, ...result });
   } catch (error) {
-    return c.json({ error: "Facebook Reel publishing failed", details: error instanceof Error ? error.message : String(error) }, 502);
+    const message = error instanceof Error ? error.message : String(error);
+    if (pageName && caption && resolvedUrl) {
+      try {
+        const pageId = (pageName === "InnoTech" ? c.env.PAGE_ID_INNOTECH : c.env.PAGE_ID_ZAWAAGO)?.trim() || "";
+        await writeHistory(c.env, {
+          id: historyId,
+          pageName,
+          pageId,
+          contentType: "reel",
+          caption,
+          videoUrl: resolvedUrl,
+          status: "failed",
+          createdAt: new Date().toISOString(),
+          error: sanitizeHistoryError(message),
+        });
+      } catch (histErr) {
+        console.warn("Could not write Reel failure history:", sanitizeHistoryError(histErr));
+      }
+    }
+    return c.json({ error: "Facebook Reel publishing failed", details: message, historyId }, 502);
   }
 });

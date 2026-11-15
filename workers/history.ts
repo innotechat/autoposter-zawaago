@@ -36,9 +36,10 @@ historyRoutes.post("/history", async (c) => {
     const body = await c.req.json<Partial<HistoryRecord>>();
     if (!body || !VALID_BRANDS.has(String(body.pageName)) || !VALID_STATUSES.has(String(body.status))) return jsonError(c, 400, "Invalid history draft.");
     if (body.contentType !== "reel" || !body.videoUrl || !String(body.caption || "").trim()) return jsonError(c, 400, "Reel draft requires contentType, videoUrl and caption.");
-    const pageName = body.pageName as "Zawaago" | "InnoTech"; const videoUrl = String(body.videoUrl); const requestOrigin = new URL(c.req.url).origin;
-    let parsed: URL; try { parsed = new URL(videoUrl, requestOrigin); } catch { return jsonError(c, 400, "Invalid Reel video URL."); }
-    if (parsed.origin !== requestOrigin || !parsed.pathname.startsWith("/api/autoposter/assets/")) return jsonError(c, 400, "Reel video must use this Worker asset origin.");
+    const pageName = body.pageName as "Zawaago" | "InnoTech"; const rawVideoUrl = String(body.videoUrl); const requestOrigin = new URL(c.req.url).origin;
+    let parsed: URL; try { parsed = new URL(rawVideoUrl, requestOrigin); } catch { return jsonError(c, 400, "Invalid Reel video URL."); }
+    if (!parsed.pathname.startsWith("/api/autoposter/assets/")) return jsonError(c, 400, "Reel video must reference a valid Autoposter asset path.");
+    const videoUrl = `${requestOrigin}${parsed.pathname}${parsed.search}`;
     const record: HistoryRecord = { id: crypto.randomUUID(), pageName, pageId: String(body.pageId || ""), contentType: "reel", caption: String(body.caption).slice(0, 10000), videoUrl, status: body.status as "draft" | "published" | "failed", createdAt: new Date().toISOString() };
     await writeHistory(c.env, record); return c.json({ ok: true, record });
   } catch (error) { return jsonError(c, 400, sanitizeHistoryError(error)); }
@@ -47,10 +48,40 @@ historyRoutes.post("/history", async (c) => {
 historyRoutes.get("/history", async (c) => {
   if (!c.env.ASSETS) return jsonError(c, 503, "Asset storage is not configured.");
   let brand: "Zawaago" | "InnoTech" | undefined; try { brand = normalizeBrand(c.req.query("brand")); } catch (error) { return jsonError(c, 400, error instanceof Error ? error.message : "Invalid brand."); }
-  const rawLimit = Number(c.req.query("limit") || "30"); const limit = Number.isFinite(rawLimit) ? Math.min(60, Math.max(1, Math.floor(rawLimit))) : 30; const cursor = c.req.query("cursor") || undefined; const prefix = brand ? `${HISTORY_PREFIX}${brand.toLowerCase()}/` : HISTORY_PREFIX;
-  const listed = await c.env.ASSETS.list({ prefix, cursor, limit }); const records: HistoryRecord[] = [];
-  for (const object of listed.objects) { if (!brandFromKey(object.key)) continue; const stored = await c.env.ASSETS.get(object.key); if (!stored) continue; try { const record = await stored.json<HistoryRecord>(); if (record && VALID_BRANDS.has(record.pageName) && VALID_STATUSES.has(record.status)) records.push(record); } catch { /* Ignore malformed history objects. */ } }
-  records.sort((a, b) => b.createdAt.localeCompare(a.createdAt)); return c.json({ ok: true, records, cursor: listed.truncated ? listed.cursor : null });
+  const rawLimit = Number(c.req.query("limit") || "30");
+  const limit = Number.isFinite(rawLimit) ? Math.min(60, Math.max(1, Math.floor(rawLimit))) : 30;
+  const rawOffset = Number(c.req.query("cursor") || "0");
+  const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? Math.floor(rawOffset) : 0;
+  const prefix = brand ? `${HISTORY_PREFIX}${brand.toLowerCase()}/` : HISTORY_PREFIX;
+
+  const allObjects: R2Object[] = [];
+  let r2Cursor: string | undefined;
+  do {
+    const listed = await c.env.ASSETS.list({ prefix, cursor: r2Cursor, limit: 1000 });
+    for (const object of listed.objects) {
+      if (brandFromKey(object.key)) allObjects.push(object);
+    }
+    r2Cursor = listed.truncated ? listed.cursor : undefined;
+  } while (r2Cursor && allObjects.length < 3000);
+
+  allObjects.sort((a, b) => b.uploaded.getTime() - a.uploaded.getTime());
+  const slice = allObjects.slice(offset, offset + limit);
+  const loaded = await Promise.all(
+    slice.map(async (object) => {
+      const stored = await c.env.ASSETS!.get(object.key);
+      if (!stored) return null;
+      try {
+        const record = await stored.json<HistoryRecord>();
+        if (record && VALID_BRANDS.has(record.pageName) && VALID_STATUSES.has(record.status)) return record;
+      } catch { /* Ignore malformed history objects. */ }
+      return null;
+    })
+  );
+
+  const records = loaded.filter((r): r is HistoryRecord => r !== null);
+  records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const nextCursor = offset + limit < allObjects.length ? String(offset + limit) : null;
+  return c.json({ ok: true, records, cursor: nextCursor, total: allObjects.length });
 });
 
 historyRoutes.delete("/history/:id", async (c) => {

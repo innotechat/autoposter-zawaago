@@ -358,32 +358,23 @@ async function executeReelPlan(
     env.DB
   );
 
-  // Step 2: Render or store Reel MP4 Asset in R2
+  // Step 2: Check for an existing rendered MP4 asset in R2 (do not upload invalid 12-byte placeholder MP4s)
   if (!videoUrl || options.forceRegenerate) {
     if (env.ASSETS) {
       const safeBrand = plan.brand.toLowerCase().replace(/[^a-z0-9]+/g, "-");
       const videoKey = `generated/${safeBrand}/reel-${plan.id}.mp4`;
-      // Check if video already exists in R2
-      const existingObj = await env.ASSETS.get(videoKey);
-      if (existingObj) {
-        videoUrl = `${reqMock.url}/api/autoposter/assets/${encodeURIComponent(videoKey)}`;
-      } else {
-        // Create registered video placeholder / asset manifest in R2
-        const dummyMp4Header = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109]);
-        await env.ASSETS.put(videoKey, dummyMp4Header, {
-          httpMetadata: { contentType: "video/mp4" },
-          customMetadata: { planId: plan.id, brand: plan.brand, title: plan.title }
-        });
+      const existingObj = await env.ASSETS.head(videoKey);
+      if (existingObj && existingObj.size > 1000) {
         videoUrl = `${reqMock.url}/api/autoposter/assets/${encodeURIComponent(videoKey)}`;
       }
-    } else {
-      videoUrl = `${reqMock.url}/api/autoposter/assets/generated/${plan.brand.toLowerCase()}/reel-${plan.id}.mp4`;
     }
 
-    plan.generatedVideoUrl = videoUrl;
-    updatePlan(plan.id, { generatedVideoUrl: videoUrl });
-    if (env.DB) {
-      await updatePlanInD1(plan.id, { generatedVideoUrl: videoUrl }, env.DB);
+    if (videoUrl) {
+      plan.generatedVideoUrl = videoUrl;
+      updatePlan(plan.id, { generatedVideoUrl: videoUrl });
+      if (env.DB) {
+        await updatePlanInD1(plan.id, { generatedVideoUrl: videoUrl }, env.DB);
+      }
     }
   }
 
@@ -415,6 +406,9 @@ async function executeReelPlan(
     options.publishNow || new Date(plan.scheduledFor).getTime() <= Date.now() + 60_000;
 
   if (shouldPublishImmediately) {
+    if (!videoUrl) {
+      throw new Error("Reel MP4 video has not been rendered yet. Render the Reel in Reel Studio before publishing.");
+    }
     return await publishReelToFacebook(plan, job, env, videoUrl);
   } else {
     // Schedule Reel
@@ -505,10 +499,12 @@ async function publishPostToFacebook(
   );
 
   let fbPostId = "";
+  let resolvedPageId = "";
   const now = new Date().toISOString();
 
   try {
     const pageConfig = getPageConfig(plan.brand, env);
+    resolvedPageId = pageConfig.id;
     const pageToken = getPageToken(plan.brand, env);
 
     if (imageUrl && !imageUrl.includes("placeholder")) {
@@ -520,20 +516,22 @@ async function publishPostToFacebook(
     }
   } catch (fbErr: any) {
     const errorMsg = fbErr instanceof Error ? fbErr.message : String(fbErr);
-    // If Facebook tokens are missing or mock in local development environment, record graceful simulation
-    if (
-      errorMsg.includes("not configured") ||
-      errorMsg.includes("rejected the Page token") ||
-      errorMsg.includes("fetch failed") ||
-      errorMsg.includes("400") ||
-      errorMsg.includes("401") ||
-      errorMsg.includes("403")
-    ) {
-      console.warn("Facebook API publish notice (simulated publish record):", errorMsg);
-      fbPostId = `fb-sim-${plan.brand.toLowerCase()}-${Date.now()}`;
-    } else {
-      throw fbErr;
+    try {
+      await writeHistory(env, {
+        id: plan.id,
+        pageName: plan.brand as any,
+        pageId: resolvedPageId || `page-${plan.brand.toLowerCase()}`,
+        contentType: imageUrl && !imageUrl.includes("placeholder") ? "image" : "text",
+        caption,
+        ...(imageUrl ? { imageUrl } : {}),
+        status: "failed",
+        createdAt: now,
+        error: sanitizeHistoryError(errorMsg)
+      });
+    } catch (histErr) {
+      console.warn("writeHistory failure notice:", histErr);
     }
+    throw fbErr;
   }
 
   // Update plan and job with publication record
@@ -641,17 +639,22 @@ async function publishReelToFacebook(
     fbVideoId = String(result.videoId || "");
   } catch (reelErr: any) {
     const errorMsg = reelErr instanceof Error ? reelErr.message : String(reelErr);
-    if (
-      errorMsg.includes("not configured") ||
-      errorMsg.includes("rejected the Page token") ||
-      errorMsg.includes("upload failed") ||
-      errorMsg.includes("fetch failed")
-    ) {
-      console.warn("Facebook Reel publish notice (simulated publish record):", errorMsg);
-      fbVideoId = `fb-reel-sim-${plan.brand.toLowerCase()}-${Date.now()}`;
-    } else {
-      throw reelErr;
+    try {
+      await writeHistory(env, {
+        id: plan.id,
+        pageName: plan.brand as any,
+        pageId: `page-${plan.brand.toLowerCase()}`,
+        contentType: "reel",
+        caption,
+        videoUrl,
+        status: "failed",
+        createdAt: now,
+        error: sanitizeHistoryError(errorMsg)
+      });
+    } catch (histErr) {
+      console.warn("writeHistory Reel failure notice:", histErr);
     }
+    throw reelErr;
   }
 
   plan.facebookVideoId = fbVideoId;

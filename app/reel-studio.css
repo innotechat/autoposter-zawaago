@@ -407,8 +407,10 @@
 .reel-preview video {
   display: block;
   width: min(100%, 360px);
+  aspect-ratio: 9 / 16;
   height: auto;
   max-height: 600px;
+  object-fit: contain;
   margin: 6px auto;
   border-radius: 14px;
   background: #000;

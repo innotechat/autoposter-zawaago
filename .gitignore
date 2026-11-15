@@ -6,3 +6,10 @@ build/
 .backup-vanilla/
 public/_old-*
 worker-configuration.d.ts
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+!.env.example
+*.pem
+*.key

@@ -219,14 +219,91 @@ apiRoutes.get("/autoposter/health", (c) => c.json({
   timestamp: new Date().toISOString(),
 }));
 
-apiRoutes.get("/autoposter/assets/*", async (c) => {
+function inferAssetContentType(key: string, existing?: string): string {
+  if (existing && existing.trim()) return existing;
+  const lower = key.toLowerCase();
+  if (lower.endsWith(".mp4")) return "video/mp4";
+  if (lower.endsWith(".webm")) return "video/webm";
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".svg")) return "image/svg+xml";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  return "application/octet-stream";
+}
+
+function parseByteRange(rangeHeader: string, totalSize: number): { offset: number; length: number; start: number; end: number } | "invalid" {
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader.trim());
+  if (!match) return "invalid";
+  const [, rawStart, rawEnd] = match;
+  if (!rawStart && !rawEnd) return "invalid";
+
+  let start = 0;
+  let end = totalSize - 1;
+
+  if (!rawStart && rawEnd) {
+    const suffix = Number(rawEnd);
+    if (!Number.isFinite(suffix) || suffix <= 0) return "invalid";
+    start = Math.max(0, totalSize - suffix);
+  } else {
+    start = Number(rawStart);
+    if (!Number.isFinite(start) || start < 0 || start >= totalSize) return "invalid";
+    if (rawEnd) {
+      end = Math.min(totalSize - 1, Number(rawEnd));
+      if (!Number.isFinite(end) || end < start) return "invalid";
+    }
+  }
+
+  return { offset: start, length: end - start + 1, start, end };
+}
+
+apiRoutes.on(["GET", "HEAD"], "/autoposter/assets/*", async (c) => {
   if (!c.env.ASSETS) return c.text("Image storage is not configured", 503);
   const key = decodeURIComponent(c.req.path.replace("/api/autoposter/assets/", ""));
+  const rangeHeader = c.req.header("range");
+
+  if (rangeHeader || c.req.method === "HEAD") {
+    const headObj = await c.env.ASSETS.head(key);
+    if (!headObj) return c.text("Asset not found", 404);
+
+    const headers = new Headers();
+    headObj.writeHttpMetadata(headers);
+    headers.set("content-type", inferAssetContentType(key, headers.get("content-type") || undefined));
+    headers.set("etag", headObj.httpEtag);
+    headers.set("accept-ranges", "bytes");
+    headers.set("access-control-allow-origin", "*");
+    headers.set("cross-origin-resource-policy", "cross-origin");
+    if (!headers.has("cache-control")) headers.set("cache-control", "public, max-age=31536000, immutable");
+
+    if (rangeHeader && headObj.size > 0) {
+      const parsed = parseByteRange(rangeHeader, headObj.size);
+      if (parsed === "invalid") {
+        headers.set("content-range", `bytes */${headObj.size}`);
+        return new Response(null, { status: 416, headers });
+      }
+      headers.set("content-range", `bytes ${parsed.start}-${parsed.end}/${headObj.size}`);
+      headers.set("content-length", String(parsed.length));
+      if (c.req.method === "HEAD") return new Response(null, { status: 206, headers });
+
+      const rangedObj = await c.env.ASSETS.get(key, { range: { offset: parsed.offset, length: parsed.length } });
+      if (!rangedObj) return c.text("Asset not found", 404);
+      return new Response(rangedObj.body, { status: 206, headers });
+    }
+
+    headers.set("content-length", String(headObj.size));
+    return new Response(null, { status: 200, headers });
+  }
+
   const object = await c.env.ASSETS.get(key);
-  if (!object) return c.text("Image not found", 404);
+  if (!object) return c.text("Asset not found", 404);
   const headers = new Headers();
   object.writeHttpMetadata(headers);
+  headers.set("content-type", inferAssetContentType(key, headers.get("content-type") || undefined));
   headers.set("etag", object.httpEtag);
+  headers.set("content-length", String(object.size));
+  headers.set("accept-ranges", "bytes");
+  headers.set("access-control-allow-origin", "*");
+  headers.set("cross-origin-resource-policy", "cross-origin");
+  if (!headers.has("cache-control")) headers.set("cache-control", "public, max-age=31536000, immutable");
   return new Response(object.body, { headers });
 });
 
